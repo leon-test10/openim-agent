@@ -57,8 +57,9 @@ class User(BaseEntity):
     def handle_message(self, message: Message):
         print(f"\n[User: {self.name} received] {message.sender_id}: {message.content}")
 
-    def create_agent(self, name: str, role: str, **kwargs):
-        agent = self.orchestrator.create_agent(name, role, **kwargs)
+    def create_agent(self, name: str, role: str):
+        """Create a new agent through the orchestrator."""
+        agent = self.orchestrator.create_agent(name, role)
         print(f"\n[User: {self.name}] Created new agent: {agent.name} ({agent.id})")
         return agent
 
@@ -74,7 +75,7 @@ class Agent(BaseEntity):
         self.sub_agents: List[str] = []
         self.peers: List[str] = []
         
-        # Capabilities
+        # Capabilities (reserved for future use)
         self.skills: List[str] = []
         self.tools: List[str] = []
         self.resources: Dict[str, Any] = {}
@@ -96,6 +97,10 @@ When asked to process something, use the available tools to accomplish the goal,
         self.llm_history = [{"role": "system", "content": self.system_prompt}]
         
         print(f"[System] Agent '{self.name}' ({self.role}) has been CREATED.")
+
+    def __repr__(self):
+        """Return a string representation of the agent for debugging."""
+        return f"Agent(name='{self.name}', role='{self.role}', id='{self.id}', status='{self.status.value}')"
 
     def wake_up(self):
         if self.status != AgentStatus.AWAKE:
