@@ -1,0 +1,248 @@
+import { mkdtempSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { afterEach, describe, expect, it } from "vitest";
+import { openDatabase } from "../../src/storage/db.js";
+import { SemanticEventRepository } from "../../src/core/semantic-event.repository.js";
+import { SessionBindingRepository } from "../../src/core/session-binding.repository.js";
+import { RuntimeJobRepository } from "../../src/core/runtime-job.repository.js";
+import type { SemanticEvent } from "../../src/core/semantic-event.js";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  for (const dir of tempDirs.splice(0)) {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+function createTempDb() {
+  const dir = mkdtempSync(join(tmpdir(), "openim-codex-bridge-"));
+  tempDirs.push(dir);
+  return openDatabase(`file:${join(dir, "bridge.sqlite")}`);
+}
+
+const semanticEvent: SemanticEvent = {
+  id: "evt_1",
+  openimMessageId: "server_1",
+  openimClientMsgId: "client_1",
+  openimConversationId: "single:codex_bot:user_1",
+  senderUserId: "user_1",
+  receiverUserId: "codex_bot",
+  groupId: null,
+  eventType: "openim.single.text",
+  contentType: 101,
+  text: "hello",
+  ex: null,
+  rawPayload: { sendID: "user_1" },
+  createdAt: 1000
+};
+
+describe("repositories", () => {
+  it("persists events, creates active session records, and updates job status", () => {
+    const db = createTempDb();
+    const events = new SemanticEventRepository(db);
+    const sessions = new SessionBindingRepository(db);
+    const jobs = new RuntimeJobRepository(db);
+
+    events.insert(semanticEvent);
+    const session = sessions.getOrCreateActiveSession({
+      openimConversationId: "single:codex_bot:user_1",
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    const sameSession = sessions.getOrCreateActiveSession({
+      openimConversationId: "single:codex_bot:user_1",
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+
+    expect(sameSession.id).toBe(session.id);
+    expect(session.isActive).toBe(true);
+    expect(session.codexSessionId).toBeNull();
+
+    const job = jobs.createQueuedJob({
+      sessionRecordId: session.id,
+      semanticEventId: semanticEvent.id,
+      openimConversationId: semanticEvent.openimConversationId,
+      inputText: "hello",
+      codexSessionIdBefore: null
+    });
+    jobs.markRunning(job.id, 1100);
+    jobs.markSucceeded(job.id, {
+      finishedAt: 1200,
+      outputText: "done",
+      codexSessionIdAfter: "11111111-1111-1111-1111-111111111111"
+    });
+    sessions.updateCodexSessionId(session.id, "11111111-1111-1111-1111-111111111111");
+
+    expect(jobs.getById(job.id)?.status).toBe("succeeded");
+    expect(sessions.getActiveByConversationId("single:codex_bot:user_1")?.codexSessionId).toBe(
+      "11111111-1111-1111-1111-111111111111"
+    );
+
+    db.close();
+  });
+
+  it("lists active bindings and recent jobs for conversation status views", () => {
+    const db = createTempDb();
+    const events = new SemanticEventRepository(db);
+    const sessions = new SessionBindingRepository(db);
+    const jobs = new RuntimeJobRepository(db);
+
+    events.insert(semanticEvent);
+    const session = sessions.getOrCreateActiveSession({
+      openimConversationId: semanticEvent.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    sessions.updateCodexSessionId(session.id, "thread_1");
+    const queued = jobs.createQueuedJob({
+      sessionRecordId: session.id,
+      semanticEventId: semanticEvent.id,
+      openimConversationId: semanticEvent.openimConversationId,
+      inputText: "queued",
+      codexSessionIdBefore: "thread_1"
+    });
+    const running = jobs.createQueuedJob({
+      sessionRecordId: session.id,
+      semanticEventId: semanticEvent.id,
+      openimConversationId: semanticEvent.openimConversationId,
+      inputText: "running",
+      codexSessionIdBefore: "thread_1"
+    });
+    jobs.markRunning(running.id, 2000);
+    const succeeded = jobs.createQueuedJob({
+      sessionRecordId: session.id,
+      semanticEventId: semanticEvent.id,
+      openimConversationId: semanticEvent.openimConversationId,
+      inputText: "latest",
+      codexSessionIdBefore: "thread_1"
+    });
+    jobs.markSucceeded(succeeded.id, {
+      outputText: "done",
+      codexSessionIdAfter: "thread_1",
+      finishedAt: 3000
+    });
+
+    const bindings = sessions.listActiveBindings();
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]).toMatchObject({
+      openimConversationId: semanticEvent.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexSessionId: "thread_1",
+      codexProjectPath: "/workspace/demo",
+      sessionStatus: "active"
+    });
+
+    expect(jobs.getActiveByConversationId(semanticEvent.openimConversationId)?.id).toBe(running.id);
+    expect(jobs.getLatestByConversationId(semanticEvent.openimConversationId)?.id).toBe(succeeded.id);
+    expect(jobs.listRecentByConversationId(semanticEvent.openimConversationId, 2).map((job) => job.id)).toEqual([
+      succeeded.id,
+      running.id
+    ]);
+    expect(jobs.getById(queued.id)?.status).toBe("queued");
+
+    db.close();
+  });
+
+  it("tracks queued and running job cancellation state", () => {
+    const db = createTempDb();
+    const events = new SemanticEventRepository(db);
+    const sessions = new SessionBindingRepository(db);
+    const jobs = new RuntimeJobRepository(db);
+
+    events.insert(semanticEvent);
+    const session = sessions.getOrCreateActiveSession({
+      openimConversationId: semanticEvent.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    const queued = jobs.createQueuedJob({
+      sessionRecordId: session.id,
+      semanticEventId: semanticEvent.id,
+      openimConversationId: semanticEvent.openimConversationId,
+      inputText: "queued",
+      codexSessionIdBefore: null
+    });
+    const cancelledQueued = jobs.cancelQueued(queued.id, { cancelledAt: 1500, cancelMethod: "api" });
+    expect(cancelledQueued).toMatchObject({
+      status: "cancelled",
+      cancelRequestedAt: 1500,
+      cancelledAt: 1500,
+      cancelMethod: "api",
+      finishedAt: 1500
+    });
+
+    const running = jobs.createQueuedJob({
+      sessionRecordId: session.id,
+      semanticEventId: semanticEvent.id,
+      openimConversationId: semanticEvent.openimConversationId,
+      inputText: "running",
+      codexSessionIdBefore: null
+    });
+    jobs.markRunning(running.id, 2000);
+    const cancelling = jobs.markCancelling(running.id, { cancelRequestedAt: 2100, cancelMethod: "api" });
+    expect(cancelling?.status).toBe("cancelling");
+    expect(jobs.getActiveByConversationId(semanticEvent.openimConversationId)?.id).toBe(running.id);
+    const cancelledRunning = jobs.markCancelled(running.id, {
+      cancelledAt: 2200,
+      cancelMethod: "api",
+      errorText: "Cancelled"
+    });
+    expect(cancelledRunning).toMatchObject({
+      status: "cancelled",
+      cancelRequestedAt: 2100,
+      cancelledAt: 2200,
+      cancelMethod: "api",
+      errorText: "Cancelled"
+    });
+
+    db.close();
+  });
+
+  it("rebinds and archives active session records", () => {
+    const db = createTempDb();
+    const sessions = new SessionBindingRepository(db);
+
+    const original = sessions.getOrCreateActiveSession({
+      openimConversationId: semanticEvent.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    sessions.updateCodexSessionId(original.id, "thread_original");
+
+    const rebound = sessions.rebindConversation({
+      openimConversationId: semanticEvent.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/other",
+      codexSessionId: "thread_manual"
+    });
+
+    expect(rebound).toMatchObject({
+      isActive: true,
+      status: "active",
+      codexProjectPath: "/workspace/other",
+      codexSessionId: "thread_manual",
+      parentSessionRecordId: original.id,
+      forkedFromCodexSessionId: "thread_original",
+      createdReason: "manual_rebind"
+    });
+    expect(sessions.getById(original.id)?.isActive).toBe(false);
+    expect(sessions.getActiveByConversationId(semanticEvent.openimConversationId)?.id).toBe(rebound.id);
+
+    const archived = sessions.archiveActiveBinding(semanticEvent.openimConversationId);
+    expect(archived).toMatchObject({
+      id: rebound.id,
+      isActive: false,
+      status: "archived"
+    });
+    expect(sessions.getActiveByConversationId(semanticEvent.openimConversationId)).toBeNull();
+    expect(() => sessions.activateSession(semanticEvent.openimConversationId, rebound.id)).toThrow(
+      `Cannot activate session record ${rebound.id}`
+    );
+
+    db.close();
+  });
+});
