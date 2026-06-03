@@ -30,6 +30,8 @@ function job(status: RuntimeJob["status"]): RuntimeJob {
     codexSessionIdAfter: "thread_1",
     outputText: status === "succeeded" ? "done" : null,
     errorText: status === "failed" ? "error" : null,
+    failureReason: status === "failed" ? "codex_exit" : null,
+    retryOfJobId: null,
     cancelRequestedAt: status === "cancelled" || status === "cancelling" ? 1100 : null,
     cancelledAt: status === "cancelled" ? 1200 : null,
     cancelMethod: status === "cancelled" || status === "cancelling" ? "api" : null,

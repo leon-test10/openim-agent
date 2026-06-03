@@ -9,6 +9,8 @@ export interface RuntimeJob {
   codexSessionIdAfter: string | null;
   outputText: string | null;
   errorText: string | null;
+  failureReason: "codex_exit" | "timeout" | "bridge_error" | "openim_send_failed" | "missing_session" | null;
+  retryOfJobId: string | null;
   cancelRequestedAt: number | null;
   cancelledAt: number | null;
   cancelMethod: string | null;

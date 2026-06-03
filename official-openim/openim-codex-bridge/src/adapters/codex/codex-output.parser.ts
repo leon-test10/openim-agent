@@ -3,6 +3,13 @@ export interface ParsedCodexOutput {
   outputText: string;
 }
 
+export interface NormalizedCodexJsonEvent {
+  eventType: string;
+  title: string;
+  summary: string | null;
+  rawEvent: Record<string, unknown>;
+}
+
 const SESSION_ID_KEYS = [
   "session_id",
   "sessionId",
@@ -58,6 +65,25 @@ export function parseCodexJsonlOutput(rawOutput: string): ParsedCodexOutput {
   };
 }
 
+export function parseCodexJsonLine(line: string): Record<string, unknown> | null {
+  return parseJsonObject(line);
+}
+
+export function normalizeCodexJsonEvent(event: Record<string, unknown>): NormalizedCodexJsonEvent {
+  const item = isRecord(event.item) ? event.item : null;
+  const eventType = typeof event.type === "string" && event.type.trim() ? event.type : "codex.event";
+  const itemType = item && typeof item.type === "string" && item.type.trim() ? item.type : null;
+  const title = itemType ?? eventType;
+  const summary = summarizeEvent(item ?? event) ?? summarizeEvent(event);
+
+  return {
+    eventType,
+    title,
+    summary,
+    rawEvent: event
+  };
+}
+
 function parseJsonObject(line: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(line) as unknown;
@@ -85,6 +111,19 @@ function looksLikeAssistantEvent(event: Record<string, unknown>): boolean {
     typeof type === "string" &&
     (type.includes("assistant") || type.includes("agent_message") || type.includes("message"))
   );
+}
+
+function summarizeEvent(event: Record<string, unknown>): string | null {
+  const command = pickString(event, ["command", "cmd"]);
+  const name = pickString(event, ["name", "tool_name", "toolName"]);
+  if (command && name) {
+    return `${name}: ${command}`;
+  }
+  if (command) {
+    return command;
+  }
+
+  return pickString(event, ["message", "text", "content", "delta", "summary"]) ?? null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

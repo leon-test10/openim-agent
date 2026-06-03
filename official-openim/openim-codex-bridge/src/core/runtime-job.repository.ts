@@ -13,6 +13,8 @@ interface RuntimeJobRow {
   codex_session_id_after: string | null;
   output_text: string | null;
   error_text: string | null;
+  failure_reason: RuntimeJob["failureReason"];
+  retry_of_job_id: string | null;
   cancel_requested_at: number | null;
   cancelled_at: number | null;
   cancel_method: string | null;
@@ -27,6 +29,7 @@ export interface CreateQueuedJobInput {
   openimConversationId: string;
   inputText: string;
   codexSessionIdBefore: string | null;
+  retryOfJobId?: string | null;
 }
 
 export class RuntimeJobRepository {
@@ -39,14 +42,14 @@ export class RuntimeJobRepository {
         `
         INSERT INTO runtime_jobs (
           id, session_record_id, semantic_event_id, openim_conversation_id,
-          status, input_text, codex_session_id_before, created_at
+          status, input_text, codex_session_id_before, retry_of_job_id, created_at
         ) VALUES (
           @id, @sessionRecordId, @semanticEventId, @openimConversationId,
-          'queued', @inputText, @codexSessionIdBefore, @createdAt
+          'queued', @inputText, @codexSessionIdBefore, @retryOfJobId, @createdAt
         )
       `
       )
-      .run({ ...input, id, createdAt: Date.now() });
+      .run({ ...input, id, retryOfJobId: input.retryOfJobId ?? null, createdAt: Date.now() });
     return this.getById(id)!;
   }
 
@@ -99,6 +102,19 @@ export class RuntimeJobRepository {
       )
       .all(openimConversationId, limit) as RuntimeJobRow[];
     return rows.map(mapRuntimeJobRow);
+  }
+
+  countQueuedByConversationId(openimConversationId: string): number {
+    const row = this.db
+      .prepare(
+        `
+        SELECT COUNT(*) AS count
+        FROM runtime_jobs
+        WHERE openim_conversation_id = ? AND status = 'queued'
+      `
+      )
+      .get(openimConversationId) as { count: number };
+    return row.count;
   }
 
   markRunning(id: string, startedAt = Date.now()): void {
@@ -169,23 +185,44 @@ export class RuntimeJobRepository {
       .prepare(
         `
         UPDATE runtime_jobs
-        SET status = 'succeeded', finished_at = ?, output_text = ?, codex_session_id_after = ?
+        SET status = 'succeeded',
+            finished_at = ?,
+            output_text = ?,
+            codex_session_id_after = ?,
+            error_text = NULL,
+            failure_reason = NULL
         WHERE id = ?
       `
       )
       .run(input.finishedAt ?? Date.now(), input.outputText, input.codexSessionIdAfter, id);
   }
 
-  markFailed(id: string, input: { finishedAt?: number; errorText: string }): void {
+  markFailed(id: string, input: { finishedAt?: number; errorText: string; failureReason?: RuntimeJob["failureReason"] }): void {
     this.db
       .prepare(
         `
         UPDATE runtime_jobs
-        SET status = 'failed', finished_at = ?, error_text = ?
+        SET status = 'failed', finished_at = ?, error_text = ?, failure_reason = ?
         WHERE id = ?
       `
       )
-      .run(input.finishedAt ?? Date.now(), input.errorText, id);
+      .run(input.finishedAt ?? Date.now(), input.errorText, input.failureReason ?? "bridge_error", id);
+  }
+
+  createRetryJob(input: { sourceJobId: string; sessionRecordId: string; codexSessionIdBefore: string | null }): RuntimeJob | null {
+    const source = this.getById(input.sourceJobId);
+    if (!source || source.status === "queued" || source.status === "running" || source.status === "cancelling") {
+      return null;
+    }
+
+    return this.createQueuedJob({
+      sessionRecordId: input.sessionRecordId,
+      semanticEventId: source.semanticEventId,
+      openimConversationId: source.openimConversationId,
+      inputText: source.inputText,
+      codexSessionIdBefore: input.codexSessionIdBefore,
+      retryOfJobId: source.id
+    });
   }
 }
 
@@ -201,6 +238,8 @@ function mapRuntimeJobRow(row: RuntimeJobRow): RuntimeJob {
     codexSessionIdAfter: row.codex_session_id_after,
     outputText: row.output_text,
     errorText: row.error_text,
+    failureReason: row.failure_reason,
+    retryOfJobId: row.retry_of_job_id,
     cancelRequestedAt: row.cancel_requested_at,
     cancelledAt: row.cancelled_at,
     cancelMethod: row.cancel_method,

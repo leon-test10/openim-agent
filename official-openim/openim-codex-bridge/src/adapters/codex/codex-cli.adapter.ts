@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { parseCodexJsonlOutput } from "./codex-output.parser.js";
+import { parseCodexJsonLine, parseCodexJsonlOutput } from "./codex-output.parser.js";
 import type { CodexCliAdapter, CodexResumeInput, CodexRunHandle, CodexRunInput, CodexRunResult } from "./codex-types.js";
 
 export interface SpawnCodexCliAdapterOptions {
@@ -21,7 +21,7 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
       args.push("--model", input.model);
     }
     args.push("-");
-    return this.run(args, input.prompt);
+    return this.run(args, input.prompt, input.onEvent);
   }
 
   resumeTask(input: CodexResumeInput): Promise<CodexRunResult> {
@@ -34,10 +34,10 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
       args.push("--model", input.model);
     }
     args.push(input.sessionId, "-");
-    return this.run(args, input.prompt);
+    return this.run(args, input.prompt, input.onEvent);
   }
 
-  private run(args: string[], prompt: string): CodexRunHandle {
+  private run(args: string[], prompt: string, onEvent?: (event: Record<string, unknown>) => void): CodexRunHandle {
     const child = spawn(this.options.codexBin, args, {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
@@ -64,6 +64,7 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
     const promise = new Promise<CodexRunResult>((resolve) => {
       let stdout = "";
       let stderr = "";
+      let stdoutLineBuffer = "";
 
       const timer = setTimeout(() => {
         timedOut = true;
@@ -74,6 +75,7 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
       child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => {
         stdout += chunk;
+        stdoutLineBuffer = emitCompleteJsonLines(stdoutLineBuffer + chunk, onEvent);
       });
       child.stderr.on("data", (chunk: string) => {
         stderr += chunk;
@@ -147,4 +149,20 @@ function killProcessTree(pid: number | undefined): Promise<void> {
     }
   }
   return Promise.resolve();
+}
+
+function emitCompleteJsonLines(buffer: string, onEvent?: (event: Record<string, unknown>) => void): string {
+  if (!onEvent) {
+    return buffer;
+  }
+
+  const lines = buffer.split(/\r?\n/);
+  const remainder = lines.pop() ?? "";
+  for (const line of lines) {
+    const event = parseCodexJsonLine(line);
+    if (event) {
+      onEvent(event);
+    }
+  }
+  return remainder;
 }

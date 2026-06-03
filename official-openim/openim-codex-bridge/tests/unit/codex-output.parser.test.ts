@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCodexJsonlOutput } from "../../src/adapters/codex/codex-output.parser.js";
+import { normalizeCodexJsonEvent, parseCodexJsonlOutput } from "../../src/adapters/codex/codex-output.parser.js";
 
 describe("parseCodexJsonlOutput", () => {
   it("extracts session id and final assistant text from JSONL events", () => {
@@ -48,5 +48,24 @@ describe("parseCodexJsonlOutput", () => {
 
     expect(parsed.sessionId).toBe("019e8650-b763-7d91-a3f1-85d49321b45a");
     expect(parsed.outputText).toBe("ACK.");
+  });
+
+  it("normalizes visible Codex JSON events for runtime trace display", () => {
+    expect(
+      normalizeCodexJsonEvent({
+        type: "item.started",
+        item: { type: "tool_call", name: "shell", command: "git status --short" }
+      })
+    ).toMatchObject({
+      eventType: "item.started",
+      title: "tool_call",
+      summary: "shell: git status --short"
+    });
+
+    expect(normalizeCodexJsonEvent({ type: "agent_message", message: "done" })).toMatchObject({
+      eventType: "agent_message",
+      title: "agent_message",
+      summary: "done"
+    });
   });
 });

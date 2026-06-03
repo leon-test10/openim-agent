@@ -22,6 +22,30 @@ export interface ConversationStatus {
   activeJob: RuntimeJob | null;
   latestJob: RuntimeJob | null;
   recentJobs: RuntimeJob[];
+  queuedJobCount: number;
+}
+
+export interface RuntimeJobView extends RuntimeJob {
+  runningForMs: number | null;
+  totalDurationMs: number | null;
+  canCancel: boolean;
+  canRetry: boolean;
+}
+
+export function toRuntimeJobView(job: RuntimeJob | null, now = Date.now()): RuntimeJobView | null {
+  if (!job) {
+    return null;
+  }
+
+  const isActive = job.status === "queued" || job.status === "running" || job.status === "cancelling";
+  const isRetryable = job.status === "failed" || job.status === "cancelled";
+  return {
+    ...job,
+    runningForMs: job.startedAt && isActive ? now - job.startedAt : null,
+    totalDurationMs: job.startedAt && job.finishedAt ? job.finishedAt - job.startedAt : null,
+    canCancel: isActive,
+    canRetry: isRetryable
+  };
 }
 
 export function deriveConversationState(input: {

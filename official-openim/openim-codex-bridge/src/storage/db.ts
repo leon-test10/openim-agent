@@ -80,6 +80,8 @@ function migrate(db: BridgeDatabase): void {
       codex_session_id_after TEXT,
       output_text TEXT,
       error_text TEXT,
+      failure_reason TEXT,
+      retry_of_job_id TEXT,
       cancel_requested_at INTEGER,
       cancelled_at INTEGER,
       cancel_method TEXT,
@@ -90,10 +92,31 @@ function migrate(db: BridgeDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_runtime_jobs_conversation
       ON runtime_jobs(openim_conversation_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS runtime_events (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      session_record_id TEXT NOT NULL,
+      openim_conversation_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT,
+      raw_event_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_events_job_sequence
+      ON runtime_events(job_id, sequence);
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_events_conversation
+      ON runtime_events(openim_conversation_id, created_at);
   `);
   ensureColumn(db, "runtime_jobs", "cancel_requested_at", "INTEGER");
   ensureColumn(db, "runtime_jobs", "cancelled_at", "INTEGER");
   ensureColumn(db, "runtime_jobs", "cancel_method", "TEXT");
+  ensureColumn(db, "runtime_jobs", "failure_reason", "TEXT");
+  ensureColumn(db, "runtime_jobs", "retry_of_job_id", "TEXT");
 }
 
 function ensureColumn(db: BridgeDatabase, tableName: string, columnName: string, columnType: string): void {

@@ -78,6 +78,7 @@ describe("repositories", () => {
     sessions.updateCodexSessionId(session.id, "11111111-1111-1111-1111-111111111111");
 
     expect(jobs.getById(job.id)?.status).toBe("succeeded");
+    expect(jobs.getById(job.id)?.failureReason).toBeNull();
     expect(sessions.getActiveByConversationId("single:codex_bot:user_1")?.codexSessionId).toBe(
       "11111111-1111-1111-1111-111111111111"
     );
@@ -198,6 +199,62 @@ describe("repositories", () => {
       cancelMethod: "api",
       errorText: "Cancelled"
     });
+
+    db.close();
+  });
+
+  it("tracks failure reasons and creates retry jobs from terminal jobs", () => {
+    const db = createTempDb();
+    const events = new SemanticEventRepository(db);
+    const sessions = new SessionBindingRepository(db);
+    const jobs = new RuntimeJobRepository(db);
+
+    events.insert(semanticEvent);
+    expect(events.getById(semanticEvent.id)).toMatchObject({
+      id: semanticEvent.id,
+      senderUserId: "user_1",
+      receiverUserId: "codex_bot",
+      text: "hello"
+    });
+    const session = sessions.getOrCreateActiveSession({
+      openimConversationId: semanticEvent.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    sessions.updateCodexSessionId(session.id, "thread_1");
+    const failed = jobs.createQueuedJob({
+      sessionRecordId: session.id,
+      semanticEventId: semanticEvent.id,
+      openimConversationId: semanticEvent.openimConversationId,
+      inputText: "retry me",
+      codexSessionIdBefore: "thread_1"
+    });
+    jobs.markRunning(failed.id, 1100);
+    jobs.markFailed(failed.id, {
+      finishedAt: 1200,
+      errorText: "timeout",
+      failureReason: "timeout"
+    });
+
+    expect(jobs.getById(failed.id)).toMatchObject({
+      status: "failed",
+      failureReason: "timeout",
+      errorText: "timeout"
+    });
+
+    const retry = jobs.createRetryJob({
+      sourceJobId: failed.id,
+      sessionRecordId: session.id,
+      codexSessionIdBefore: "thread_1"
+    });
+    expect(retry).toMatchObject({
+      status: "queued",
+      retryOfJobId: failed.id,
+      inputText: "retry me",
+      semanticEventId: semanticEvent.id,
+      codexSessionIdBefore: "thread_1"
+    });
+    expect(jobs.createRetryJob({ sourceJobId: retry!.id, sessionRecordId: session.id, codexSessionIdBefore: "thread_1" })).toBeNull();
 
     db.close();
   });

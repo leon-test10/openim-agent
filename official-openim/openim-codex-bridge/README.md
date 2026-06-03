@@ -191,7 +191,10 @@ GET /api/bindings/:conversationId
 POST /api/bindings/:conversationId/rebind
 POST /api/bindings/:conversationId/archive
 GET /api/jobs/:jobId
+GET /api/jobs/:jobId/events
+GET /api/jobs/:jobId/events/stream
 POST /api/jobs/:jobId/cancel
+POST /api/jobs/:jobId/retry
 GET /api/conversations/:conversationId/status
 GET /api/conversations/:conversationId/codex-sessions
 POST /api/conversations/:conversationId/codex-sessions
@@ -234,6 +237,26 @@ Get UI-friendly conversation runtime status:
 curl "http://localhost:8787/api/conversations/single%3Acodex_bot%3Auser_1/status"
 ```
 
+Status responses include `queuedJobCount`, so Electron can explain that messages sent while Codex
+is running will be queued and executed serially after the active job finishes.
+
+Get visible Codex runtime events for a job:
+
+```bash
+curl "http://localhost:8787/api/jobs/<jobId>/events"
+curl "http://localhost:8787/api/jobs/<jobId>/events?after=3"
+```
+
+Subscribe to runtime events with Server-Sent Events:
+
+```bash
+curl -N "http://localhost:8787/api/jobs/<jobId>/events/stream"
+```
+
+The bridge records Codex CLI `--json` JSONL events as `runtime_events`. These are intended for
+status, tool-call, command, stderr/stdout-summary, and final-message UI. They are not hidden model
+reasoning.
+
 Cancel a queued or running runtime job:
 
 ```bash
@@ -247,6 +270,28 @@ Cancellation semantics:
 - terminal jobs (`succeeded`, `failed`, `cancelled`) are returned unchanged
 - timeouts use the same process termination path but are recorded as failures, not user cancels
 
+Retry a terminal runtime job:
+
+```bash
+curl -X POST http://localhost:8787/api/jobs/<jobId>/retry
+```
+
+Retry semantics:
+
+- only terminal jobs can be retried
+- the original job is kept as history
+- the new job copies the original `semanticEventId` and `inputText`
+- the new job uses the current active session for the conversation
+- the new job records `retryOfJobId`
+
+Failed jobs record `failureReason`:
+
+- `codex_exit`: Codex CLI returned a non-zero or unsuccessful result
+- `timeout`: Codex CLI exceeded `CODEX_EXEC_TIMEOUT_MS`
+- `bridge_error`: bridge worker threw an internal runtime error
+- `openim_send_failed`: Codex completed or failed, but OpenIM reply writing failed
+- `missing_session`: the job's session record was missing
+
 Status state is derived as:
 
 - `unknown`: no active session record exists for this conversation
@@ -259,6 +304,13 @@ Status state is derived as:
 
 When the latest job was cancelled and no job is active, the conversation state is `idle`; clients
 should inspect `latestJob.status == "cancelled"` to display the last cancellation.
+
+Job objects returned from binding/status APIs include UI helper fields:
+
+- `runningForMs`
+- `totalDurationMs`
+- `canCancel`
+- `canRetry`
 
 Create an additional inactive session record:
 
@@ -274,6 +326,20 @@ Activate one session record:
 curl -X POST http://localhost:8787/api/conversations/single:codex_bot:user_1/codex-sessions/<sessionRecordId>/activate
 ```
 
+## Codex CLI sandbox diagnostics
+
+The bridge should not change global Codex configuration while diagnosing Windows sandbox behavior.
+Use the diagnostic script to capture CLI version/help, environment, raw JSONL, stderr, and exit
+codes for read-only and workspace-write modes:
+
+```powershell
+..\deploy\windows\diagnose-codex-cli.ps1 `
+  -ProjectPath D:\agent_trial\claude_code\official-openim `
+  -OutputDir D:\agent_trial\claude_code\official-openim\diagnostics\codex-cli
+```
+
+The script writes diagnostics under `diagnostics/codex-cli` and does not edit `$CODEX_HOME`.
+
 ## Development
 
 ```bash
@@ -281,4 +347,4 @@ npm test
 npm run build
 ```
 
-The tests cover message filtering, prompt construction, Codex JSONL parsing, OpenIM callback parsing, job cancellation, and SQLite persistence for semantic events, session records, and runtime jobs.
+The tests cover message filtering, prompt construction, Codex JSONL parsing, runtime event persistence, OpenIM callback parsing, job cancellation, and SQLite persistence for semantic events, session records, and runtime jobs.

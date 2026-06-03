@@ -8,6 +8,7 @@ import { openDatabase } from "../../src/storage/db.js";
 import { SemanticEventRepository } from "../../src/core/semantic-event.repository.js";
 import { SessionBindingRepository } from "../../src/core/session-binding.repository.js";
 import { RuntimeJobRepository } from "../../src/core/runtime-job.repository.js";
+import { RuntimeEventRepository } from "../../src/core/runtime-event.repository.js";
 import { createServer } from "../../src/server.js";
 import type { AppContext } from "../../src/app-context.js";
 import type { SemanticEvent } from "../../src/core/semantic-event.js";
@@ -44,6 +45,7 @@ function createTempContext(overrides: Partial<Pick<AppContext, "codex" | "openim
     semanticEvents: new SemanticEventRepository(db),
     sessions: new SessionBindingRepository(db),
     jobs: new RuntimeJobRepository(db),
+    runtimeEvents: new RuntimeEventRepository(db),
     codex: overrides.codex ?? {
       runNewTask: async () => ({ ok: true, outputText: "ok", rawOutput: "" }),
       resumeTask: async () => ({ ok: true, outputText: "ok", rawOutput: "" })
@@ -118,7 +120,8 @@ describe("status API", () => {
     expect(detail.json()).toMatchObject({
       openimConversationId: event.openimConversationId,
       activeSession: { id: session.id, codexSessionId: "thread_1" },
-      recentJobs: [{ id: job.id, status: "succeeded" }]
+      latestJob: { id: job.id, status: "succeeded", canRetry: false, canCancel: false, totalDurationMs: null },
+      recentJobs: [{ id: job.id, status: "succeeded", canRetry: false }]
     });
 
     await app.close();
@@ -140,7 +143,8 @@ describe("status API", () => {
       activeSession: null,
       activeJob: null,
       latestJob: null,
-      recentJobs: []
+      recentJobs: [],
+      queuedJobCount: 0
     });
 
     const binding = await app.inject({
@@ -338,6 +342,224 @@ describe("status API", () => {
     });
     expect(archive.statusCode).toBe(409);
     expect(archive.json()).toMatchObject({ error: "active job exists" });
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("returns queued job counts and runtime events for active conversations", async () => {
+    const context = createTempContext();
+    context.semanticEvents.insert(event);
+    const session = context.sessions.getOrCreateActiveSession({
+      openimConversationId: event.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    const running = context.jobs.createQueuedJob({
+      sessionRecordId: session.id,
+      semanticEventId: event.id,
+      openimConversationId: event.openimConversationId,
+      inputText: "running",
+      codexSessionIdBefore: null
+    });
+    context.jobs.markRunning(running.id, 2000);
+    context.jobs.createQueuedJob({
+      sessionRecordId: session.id,
+      semanticEventId: event.id,
+      openimConversationId: event.openimConversationId,
+      inputText: "queued one",
+      codexSessionIdBefore: null
+    });
+    context.jobs.createQueuedJob({
+      sessionRecordId: session.id,
+      semanticEventId: event.id,
+      openimConversationId: event.openimConversationId,
+      inputText: "queued two",
+      codexSessionIdBefore: null
+    });
+    context.runtimeEvents.recordCodexJsonEvent({
+      jobId: running.id,
+      sessionRecordId: session.id,
+      openimConversationId: event.openimConversationId,
+      eventType: "tool.call",
+      rawEvent: { type: "tool.call", name: "shell", command: "pwd" }
+    });
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const status = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/status`
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({
+      state: "running",
+      queuedJobCount: 2,
+      activeJob: { id: running.id, status: "running" }
+    });
+
+    const events = await app.inject({
+      method: "GET",
+      url: `/api/jobs/${running.id}/events`
+    });
+    expect(events.statusCode).toBe(200);
+    expect(events.json()).toMatchObject({
+      events: [
+        {
+          jobId: running.id,
+          sequence: 1,
+          eventType: "tool.call",
+          rawEvent: { type: "tool.call", name: "shell", command: "pwd" }
+        }
+      ]
+    });
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("records failure reasons and retries terminal jobs", async () => {
+    let runCount = 0;
+    const sentTexts: string[] = [];
+    const codex: CodexCliAdapter = {
+      runNewTask: async () => {
+        runCount += 1;
+        if (runCount === 1) {
+          return {
+            ok: false,
+            outputText: "",
+            rawOutput: "",
+            errorText: "mock timeout",
+            exitCode: null,
+            timedOut: true
+          };
+        }
+        return {
+          ok: true,
+          sessionId: "thread_retry",
+          outputText: "retry ok",
+          rawOutput: ""
+        };
+      },
+      resumeTask: async () => ({ ok: true, outputText: "unused", rawOutput: "" })
+    };
+    const context = createTempContext({
+      codex,
+      openimSender: {
+        sendBotText: async (message) => {
+          sentTexts.push(message.text);
+        }
+      }
+    });
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const webhook = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-single-msg",
+      payload: {
+        sendID: "user_1",
+        recvID: "codex_bot",
+        conversationID: event.openimConversationId,
+        contentType: 101,
+        content: JSON.stringify({ content: "please run" })
+      }
+    });
+    const sourceJobId = webhook.json().data.jobId as string;
+    await waitFor(() => context.jobs.getById(sourceJobId)?.status === "failed");
+    expect(context.jobs.getById(sourceJobId)).toMatchObject({
+      status: "failed",
+      failureReason: "timeout",
+      errorText: "mock timeout"
+    });
+    expect(sentTexts).toContain("Codex CLI failed: mock timeout");
+
+    const status = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/status`
+    });
+    expect(status.json()).toMatchObject({
+      state: "failed",
+      latestJob: {
+        id: sourceJobId,
+        status: "failed",
+        failureReason: "timeout",
+        canRetry: true,
+        canCancel: false
+      }
+    });
+
+    const retry = await app.inject({ method: "POST", url: `/api/jobs/${sourceJobId}/retry` });
+    expect(retry.statusCode).toBe(201);
+    const retryJobId = retry.json().id as string;
+    expect(retry.json()).toMatchObject({
+      status: "queued",
+      retryOfJobId: sourceJobId,
+      inputText: "please run"
+    });
+    await waitFor(() => context.jobs.getById(retryJobId)?.status === "succeeded");
+    expect(context.jobs.getById(retryJobId)).toMatchObject({
+      status: "succeeded",
+      retryOfJobId: sourceJobId,
+      outputText: "retry ok",
+      codexSessionIdAfter: "thread_retry"
+    });
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("records Codex adapter runtime events while a webhook job runs", async () => {
+    const codex: CodexCliAdapter = {
+      runNewTask: async () => ({ ok: true, outputText: "unused", rawOutput: "" }),
+      resumeTask: async () => ({ ok: true, outputText: "unused", rawOutput: "" }),
+      runNewTaskCancellable: (input): CodexRunHandle => {
+        input.onEvent?.({ type: "agent_message", message: "thinking visibly" });
+        input.onEvent?.({
+          type: "item.started",
+          item: { type: "tool_call", name: "shell", command: "git status --short" }
+        });
+        return {
+          pid: 1234,
+          promise: Promise.resolve({
+            ok: true,
+            sessionId: "thread_events",
+            outputText: "done",
+            rawOutput: ""
+          }),
+          cancel: async () => undefined
+        };
+      }
+    };
+    const context = createTempContext({ codex });
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const webhook = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-single-msg",
+      payload: {
+        sendID: "user_1",
+        recvID: "codex_bot",
+        conversationID: event.openimConversationId,
+        contentType: 101,
+        content: JSON.stringify({ content: "please inspect status" })
+      }
+    });
+    const jobId = webhook.json().data.jobId as string;
+    await waitFor(() => context.jobs.getById(jobId)?.status === "succeeded");
+
+    expect(context.runtimeEvents.listByJobId(jobId)).toMatchObject([
+      {
+        sequence: 1,
+        eventType: "agent_message",
+        title: "agent_message",
+        summary: "thinking visibly"
+      },
+      {
+        sequence: 2,
+        eventType: "item.started",
+        title: "tool_call",
+        summary: "shell: git status --short"
+      }
+    ]);
 
     await app.close();
     context.db.close();

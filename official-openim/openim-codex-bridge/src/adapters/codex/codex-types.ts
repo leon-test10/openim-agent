@@ -2,6 +2,7 @@ export interface CodexRunInput {
   projectPath: string;
   prompt: string;
   model?: string;
+  onEvent?: (event: Record<string, unknown>) => void;
 }
 
 export interface CodexResumeInput {
@@ -9,6 +10,7 @@ export interface CodexResumeInput {
   sessionId: string;
   prompt: string;
   model?: string;
+  onEvent?: (event: Record<string, unknown>) => void;
 }
 
 export interface CodexRunResult {
