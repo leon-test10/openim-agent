@@ -151,7 +151,7 @@ export class SessionBindingRepository {
         `
         SELECT * FROM codex_session_records
         WHERE openim_conversation_id = ?
-        ORDER BY created_at ASC
+        ORDER BY is_active DESC, updated_at DESC
       `
       )
       .all(openimConversationId) as SessionRow[];

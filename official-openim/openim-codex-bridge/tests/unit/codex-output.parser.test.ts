@@ -67,5 +67,21 @@ describe("parseCodexJsonlOutput", () => {
       title: "agent_message",
       summary: "done"
     });
+
+    expect(
+      normalizeCodexJsonEvent({
+        type: "turn.completed",
+        usage: {
+          input_tokens: 255023,
+          cached_input_tokens: 199808,
+          output_tokens: 3274,
+          reasoning_output_tokens: 645
+        }
+      })
+    ).toMatchObject({
+      eventType: "turn.completed",
+      title: "turn.completed",
+      summary: "usage: input 255023, cached 199808, output 3274, reasoning 645"
+    });
   });
 });

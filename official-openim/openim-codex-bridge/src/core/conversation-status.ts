@@ -29,6 +29,9 @@ export interface ConversationStatus {
 }
 
 export interface RuntimeJobView extends RuntimeJob {
+  queuedMs: number | null;
+  runningMs: number | null;
+  totalMs: number | null;
   runningForMs: number | null;
   totalDurationMs: number | null;
   canCancel: boolean;
@@ -44,6 +47,9 @@ export function toRuntimeJobView(job: RuntimeJob | null, now = Date.now()): Runt
   const isRetryable = job.status === "failed" || job.status === "cancelled";
   return {
     ...job,
+    queuedMs: job.startedAt ? job.startedAt - job.createdAt : null,
+    runningMs: job.startedAt && job.finishedAt ? job.finishedAt - job.startedAt : null,
+    totalMs: job.finishedAt ? job.finishedAt - job.createdAt : null,
     runningForMs: job.startedAt && isActive ? now - job.startedAt : null,
     totalDurationMs: job.startedAt && job.finishedAt ? job.finishedAt - job.startedAt : null,
     canCancel: isActive,

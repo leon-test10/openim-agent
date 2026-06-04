@@ -114,6 +114,11 @@ function looksLikeAssistantEvent(event: Record<string, unknown>): boolean {
 }
 
 function summarizeEvent(event: Record<string, unknown>): string | null {
+  const usageSummary = summarizeUsage(event);
+  if (usageSummary) {
+    return usageSummary;
+  }
+
   const command = pickString(event, ["command", "cmd"]);
   const name = pickString(event, ["name", "tool_name", "toolName"]);
   if (command && name) {
@@ -128,4 +133,34 @@ function summarizeEvent(event: Record<string, unknown>): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function summarizeUsage(event: Record<string, unknown>): string | null {
+  const usage = isRecord(event.usage) ? event.usage : null;
+  if (!usage) {
+    return null;
+  }
+
+  const inputTokens = pickNumber(usage, ["input_tokens", "inputTokens"]);
+  const cachedInputTokens = pickNumber(usage, ["cached_input_tokens", "cachedInputTokens"]);
+  const outputTokens = pickNumber(usage, ["output_tokens", "outputTokens"]);
+  const reasoningOutputTokens = pickNumber(usage, ["reasoning_output_tokens", "reasoningOutputTokens"]);
+  const parts = [
+    inputTokens === null ? null : `input ${inputTokens}`,
+    cachedInputTokens === null ? null : `cached ${cachedInputTokens}`,
+    outputTokens === null ? null : `output ${outputTokens}`,
+    reasoningOutputTokens === null ? null : `reasoning ${reasoningOutputTokens}`
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.length ? `usage: ${parts.join(", ")}` : null;
+}
+
+function pickNumber(event: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = event[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
 }

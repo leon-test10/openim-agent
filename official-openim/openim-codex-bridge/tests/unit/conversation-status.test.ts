@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deriveConversationState } from "../../src/core/conversation-status.js";
+import { toRuntimeJobView } from "../../src/core/conversation-status.js";
 import type { RuntimeJob } from "../../src/core/runtime-job.js";
 import type { CodexSessionRecord } from "../../src/core/session-binding.js";
 
@@ -68,5 +69,21 @@ describe("deriveConversationState", () => {
     );
     expect(deriveConversationState({ activeSession: session, activeJob: null, latestJob: job("failed") })).toBe("failed");
     expect(deriveConversationState({ activeSession: session, activeJob: null, latestJob: job("cancelled") })).toBe("idle");
+  });
+
+  it("derives queued, running, and total job durations", () => {
+    const view = toRuntimeJobView({
+      ...job("succeeded"),
+      createdAt: 1000,
+      startedAt: 1500,
+      finishedAt: 3500
+    });
+
+    expect(view).toMatchObject({
+      queuedMs: 500,
+      runningMs: 2000,
+      totalMs: 2500,
+      totalDurationMs: 2000
+    });
   });
 });
