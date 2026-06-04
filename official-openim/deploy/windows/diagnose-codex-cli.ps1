@@ -2,12 +2,61 @@ param(
   [string]$CodexBin = "codex",
   [string]$ProjectPath = (Resolve-Path "$PSScriptRoot\..\..").Path,
   [string]$OutputDir = (Resolve-Path "$PSScriptRoot\..\..").Path + "\diagnostics\codex-cli",
+  [string]$CodexHomeDir = "",
+  [string]$BaseCodexHome = "",
+  [ValidateSet("copy-auth-only", "copy-auth-and-config", "none")]
+  [string]$SeedMode = "copy-auth-only",
   [string[]]$SandboxModes = @("read-only", "workspace-write")
 )
 
 $ErrorActionPreference = "Continue"
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+
+$originalCodexHome = $env:CODEX_HOME
+
+function Copy-CodexHomeSeed {
+  param(
+    [string]$SourceHome,
+    [string]$TargetHome,
+    [string]$Mode
+  )
+
+  if ([string]::IsNullOrWhiteSpace($TargetHome)) {
+    return
+  }
+
+  New-Item -ItemType Directory -Force -Path $TargetHome | Out-Null
+  if ($Mode -eq "none" -or [string]::IsNullOrWhiteSpace($SourceHome) -or -not (Test-Path $SourceHome)) {
+    return
+  }
+
+  $files = @("auth.json", "credentials.json")
+  if ($Mode -eq "copy-auth-and-config") {
+    $files += "config.toml"
+  }
+
+  foreach ($file in $files) {
+    $source = Join-Path $SourceHome $file
+    $target = Join-Path $TargetHome $file
+    if ((Test-Path $source) -and -not (Test-Path $target)) {
+      Copy-Item -Path $source -Destination $target
+    }
+  }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($CodexHomeDir)) {
+  if ([string]::IsNullOrWhiteSpace($BaseCodexHome)) {
+    if (-not [string]::IsNullOrWhiteSpace($originalCodexHome)) {
+      $BaseCodexHome = $originalCodexHome
+    } else {
+      $BaseCodexHome = Join-Path $env:USERPROFILE ".codex"
+    }
+  }
+
+  Copy-CodexHomeSeed -SourceHome $BaseCodexHome -TargetHome $CodexHomeDir -Mode $SeedMode
+  $env:CODEX_HOME = $CodexHomeDir
+}
 
 function Write-CommandOutput {
   param(
@@ -34,6 +83,9 @@ $envReport = [ordered]@{
   projectPath = $ProjectPath
   outputDir = $OutputDir
   CODEX_HOME = $env:CODEX_HOME
+  codexHomeDir = $CodexHomeDir
+  baseCodexHome = $BaseCodexHome
+  seedMode = $SeedMode
   USERPROFILE = $env:USERPROFILE
   PATH = $env:PATH
 }
@@ -58,3 +110,5 @@ Please report:
 }
 
 Write-Host "Codex CLI diagnostics written to $OutputDir"
+
+$env:CODEX_HOME = $originalCodexHome

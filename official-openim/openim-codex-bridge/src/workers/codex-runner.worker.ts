@@ -3,6 +3,7 @@ import type { AppContext } from "../app-context.js";
 import type { CodexResumeInput, CodexRunHandle, CodexRunInput } from "../adapters/codex/codex-types.js";
 import type { RuntimeJob } from "../core/runtime-job.js";
 import type { SemanticEvent } from "../core/semantic-event.js";
+import { ensureCodexRuntimeHome } from "../core/codex-runtime-home.service.js";
 import { buildCodexPrompt } from "../core/prompt-builder.service.js";
 import { normalizeCodexJsonEvent } from "../adapters/codex/codex-output.parser.js";
 
@@ -91,7 +92,7 @@ export class CodexRunnerWorker {
       return;
     }
 
-    const session = this.context.sessions.getById(job.sessionRecordId);
+    const session = this.context.sessions.ensureRuntimeFields(job.sessionRecordId);
     if (!session) {
       this.context.jobs.markFailed(jobId, {
         errorText: "Codex session record not found",
@@ -106,6 +107,7 @@ export class CodexRunnerWorker {
       codexSessionId: session.codexSessionId,
       userText: job.inputText
     });
+    const codexHomeDir = ensureCodexRuntimeHome(session, this.context.config);
 
     try {
       const handle = session.codexSessionId
@@ -114,12 +116,16 @@ export class CodexRunnerWorker {
             sessionId: session.codexSessionId,
             prompt,
             model: this.context.config.CODEX_DEFAULT_MODEL || undefined,
+            codexHomeDir,
+            sandboxMode: session.sandboxMode ?? undefined,
             onEvent: (codexEvent) => this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, codexEvent)
           })
         : this.runNewTask({
             projectPath: session.codexProjectPath,
             prompt,
             model: this.context.config.CODEX_DEFAULT_MODEL || undefined,
+            codexHomeDir,
+            sandboxMode: session.sandboxMode ?? undefined,
             onEvent: (codexEvent) => this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, codexEvent)
           });
 
@@ -131,8 +137,26 @@ export class CodexRunnerWorker {
         this.runningJobs.delete(jobId);
         return;
       }
-      const result = await handle.promise;
+      let result = await handle.promise;
       this.runningJobs.delete(jobId);
+
+      if (!result.ok && session.codexSessionId && isMissingCodexRolloutError(result.errorText)) {
+        this.logger.warn(
+          { jobId, sessionRecordId: session.id, codexSessionId: session.codexSessionId, codexHomeDir },
+          "Codex resume failed because the isolated home does not contain the old rollout; starting a new task"
+        );
+        const fallbackHandle = this.runNewTask({
+          projectPath: session.codexProjectPath,
+          prompt,
+          model: this.context.config.CODEX_DEFAULT_MODEL || undefined,
+          codexHomeDir,
+          sandboxMode: session.sandboxMode ?? undefined,
+          onEvent: (codexEvent) => this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, codexEvent)
+        });
+        this.runningJobs.set(jobId, fallbackHandle);
+        result = await fallbackHandle.promise;
+        this.runningJobs.delete(jobId);
+      }
 
       const latestJob = this.context.jobs.getById(jobId);
       if (result.cancelled || latestJob?.status === "cancelling" || latestJob?.status === "cancelled") {
@@ -254,4 +278,8 @@ export class CodexRunnerWorker {
       cancel: async () => undefined
     };
   }
+}
+
+function isMissingCodexRolloutError(errorText: string | undefined): boolean {
+  return Boolean(errorText?.includes("no rollout found for thread id"));
 }

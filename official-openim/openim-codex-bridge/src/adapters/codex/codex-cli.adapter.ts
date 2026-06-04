@@ -17,11 +17,14 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
 
   runNewTaskCancellable(input: CodexRunInput): CodexRunHandle {
     const args = ["exec", "--cd", input.projectPath, "--json"];
+    if (input.sandboxMode) {
+      args.push("--sandbox", input.sandboxMode);
+    }
     if (input.model) {
       args.push("--model", input.model);
     }
     args.push("-");
-    return this.run(args, input.prompt, input.onEvent);
+    return this.run(args, input.prompt, input.onEvent, input.codexHomeDir);
   }
 
   resumeTask(input: CodexResumeInput): Promise<CodexRunResult> {
@@ -30,15 +33,24 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
 
   resumeTaskCancellable(input: CodexResumeInput): CodexRunHandle {
     const args = ["exec", "--cd", input.projectPath, "resume", "--json"];
+    if (input.sandboxMode) {
+      args.push("--sandbox", input.sandboxMode);
+    }
     if (input.model) {
       args.push("--model", input.model);
     }
     args.push(input.sessionId, "-");
-    return this.run(args, input.prompt, input.onEvent);
+    return this.run(args, input.prompt, input.onEvent, input.codexHomeDir);
   }
 
-  private run(args: string[], prompt: string, onEvent?: (event: Record<string, unknown>) => void): CodexRunHandle {
+  private run(
+    args: string[],
+    prompt: string,
+    onEvent?: (event: Record<string, unknown>) => void,
+    codexHomeDir?: string
+  ): CodexRunHandle {
     const child = spawn(this.options.codexBin, args, {
+      env: codexHomeDir ? { ...process.env, CODEX_HOME: codexHomeDir } : process.env,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       shell: process.platform === "win32",

@@ -43,7 +43,11 @@ describe("repositories", () => {
   it("persists events, creates active session records, and updates job status", () => {
     const db = createTempDb();
     const events = new SemanticEventRepository(db);
-    const sessions = new SessionBindingRepository(db);
+    const sessions = new SessionBindingRepository(db, {
+      codexSessionHomeRoot: join(tmpdir(), "openim-codex-bridge-test-homes"),
+      codexHomeSeedMode: "copy-auth-only",
+      sandboxMode: "workspace-write"
+    });
     const jobs = new RuntimeJobRepository(db);
 
     events.insert(semanticEvent);
@@ -61,6 +65,10 @@ describe("repositories", () => {
     expect(sameSession.id).toBe(session.id);
     expect(session.isActive).toBe(true);
     expect(session.codexSessionId).toBeNull();
+    expect(session.codexHomeDir).toContain("openim-codex-bridge-test-homes");
+    expect(session.codexHomeDir).toContain(session.id);
+    expect(session.codexHomeSeedMode).toBe("copy-auth-only");
+    expect(session.sandboxMode).toBe("workspace-write");
 
     const job = jobs.createQueuedJob({
       sessionRecordId: session.id,

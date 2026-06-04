@@ -19,7 +19,12 @@ const context = {
   config,
   db,
   semanticEvents: new SemanticEventRepository(db),
-  sessions: new SessionBindingRepository(db),
+  sessions: new SessionBindingRepository(db, {
+    codexSessionHomeMode: config.CODEX_SESSION_HOME_MODE,
+    codexSessionHomeRoot: config.CODEX_SESSION_HOME_ROOT,
+    codexHomeSeedMode: config.CODEX_SESSION_HOME_SEED_MODE,
+    sandboxMode: config.CODEX_SANDBOX_MODE
+  }),
   jobs: new RuntimeJobRepository(db),
   runtimeEvents: new RuntimeEventRepository(db),
   codex: new SpawnCodexCliAdapter({

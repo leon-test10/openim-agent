@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { BridgeDatabase } from "../storage/db.js";
 import { createId } from "../utils/ids.js";
 import type { BindingSummary } from "./conversation-status.js";
@@ -9,6 +10,9 @@ interface SessionRow {
   openim_display_user_id: string;
   codex_session_id: string | null;
   codex_project_path: string;
+  codex_home_dir: string | null;
+  codex_home_seed_mode: CodexSessionRecord["codexHomeSeedMode"];
+  sandbox_mode: string | null;
   is_active: number;
   status: "active" | "paused" | "archived" | "error";
   parent_session_record_id: string | null;
@@ -28,8 +32,18 @@ export interface RebindConversationInput extends GetOrCreateActiveSessionInput {
   codexSessionId?: string | null;
 }
 
+export interface SessionRuntimeOptions {
+  codexSessionHomeMode?: "per-session" | "disabled";
+  codexSessionHomeRoot?: string;
+  codexHomeSeedMode?: NonNullable<CodexSessionRecord["codexHomeSeedMode"]>;
+  sandboxMode?: string;
+}
+
 export class SessionBindingRepository {
-  constructor(private readonly db: BridgeDatabase) {}
+  constructor(
+    private readonly db: BridgeDatabase,
+    private readonly runtimeOptions: SessionRuntimeOptions = {}
+  ) {}
 
   getOrCreateActiveSession(input: GetOrCreateActiveSessionInput): CodexSessionRecord {
     const existing = this.getActiveByConversationId(input.openimConversationId);
@@ -39,6 +53,7 @@ export class SessionBindingRepository {
 
     const now = Date.now();
     const id = createId("csr");
+    const runtime = this.createRuntimeFields(id);
     const transaction = this.db.transaction(() => {
       this.db
         .prepare(
@@ -63,11 +78,13 @@ export class SessionBindingRepository {
           `
           INSERT INTO codex_session_records (
             id, openim_conversation_id, openim_display_user_id, codex_session_id,
-            codex_project_path, is_active, status, parent_session_record_id,
+            codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode,
+            is_active, status, parent_session_record_id,
             forked_from_codex_session_id, created_reason, created_at, updated_at
           ) VALUES (
             @id, @openimConversationId, @openimDisplayUserId, NULL,
-            @codexProjectPath, 1, 'active', NULL,
+            @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode,
+            1, 'active', NULL,
             NULL, 'auto_created_from_openim_message', @createdAt, @updatedAt
           )
         `
@@ -77,6 +94,7 @@ export class SessionBindingRepository {
           openimConversationId: input.openimConversationId,
           openimDisplayUserId: input.openimDisplayUserId,
           codexProjectPath: input.codexProjectPath,
+          ...runtime,
           createdAt: now,
           updatedAt: now
         });
@@ -119,6 +137,9 @@ export class SessionBindingRepository {
       activeSessionRecordId: row.id,
       codexSessionId: row.codex_session_id,
       codexProjectPath: row.codex_project_path,
+      codexHomeDir: row.codex_home_dir,
+      codexHomeSeedMode: row.codex_home_seed_mode,
+      sandboxMode: row.sandbox_mode,
       sessionStatus: row.status,
       updatedAt: row.updated_at
     }));
@@ -147,16 +168,19 @@ export class SessionBindingRepository {
   createAdditionalSession(input: GetOrCreateActiveSessionInput): CodexSessionRecord {
     const now = Date.now();
     const id = createId("csr");
+    const runtime = this.createRuntimeFields(id);
     this.db
       .prepare(
         `
         INSERT INTO codex_session_records (
           id, openim_conversation_id, openim_display_user_id, codex_session_id,
-          codex_project_path, is_active, status, parent_session_record_id,
+          codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode,
+          is_active, status, parent_session_record_id,
           forked_from_codex_session_id, created_reason, created_at, updated_at
         ) VALUES (
           @id, @openimConversationId, @openimDisplayUserId, NULL,
-          @codexProjectPath, 0, 'active', NULL,
+          @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode,
+          0, 'active', NULL,
           NULL, 'manual_new_session', @createdAt, @updatedAt
         )
       `
@@ -166,6 +190,7 @@ export class SessionBindingRepository {
         openimConversationId: input.openimConversationId,
         openimDisplayUserId: input.openimDisplayUserId,
         codexProjectPath: input.codexProjectPath,
+        ...runtime,
         createdAt: now,
         updatedAt: now
       });
@@ -175,6 +200,7 @@ export class SessionBindingRepository {
   rebindConversation(input: RebindConversationInput): CodexSessionRecord {
     const now = Date.now();
     const id = createId("csr");
+    const runtime = this.createRuntimeFields(id);
     const previous = this.getActiveByConversationId(input.openimConversationId);
     const transaction = this.db.transaction(() => {
       this.ensureConversation(input, now);
@@ -192,11 +218,13 @@ export class SessionBindingRepository {
           `
           INSERT INTO codex_session_records (
             id, openim_conversation_id, openim_display_user_id, codex_session_id,
-            codex_project_path, is_active, status, parent_session_record_id,
+            codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode,
+            is_active, status, parent_session_record_id,
             forked_from_codex_session_id, created_reason, created_at, updated_at
           ) VALUES (
             @id, @openimConversationId, @openimDisplayUserId, @codexSessionId,
-            @codexProjectPath, 1, 'active', @parentSessionRecordId,
+            @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode,
+            1, 'active', @parentSessionRecordId,
             @forkedFromCodexSessionId, 'manual_rebind', @createdAt, @updatedAt
           )
         `
@@ -207,6 +235,7 @@ export class SessionBindingRepository {
           openimDisplayUserId: input.openimDisplayUserId,
           codexSessionId: input.codexSessionId ?? null,
           codexProjectPath: input.codexProjectPath,
+          ...runtime,
           parentSessionRecordId: previous?.id ?? null,
           forkedFromCodexSessionId: previous?.codexSessionId ?? null,
           createdAt: now,
@@ -281,6 +310,32 @@ export class SessionBindingRepository {
       .run(codexSessionId, Date.now(), sessionRecordId);
   }
 
+  ensureRuntimeFields(sessionRecordId: string): CodexSessionRecord | null {
+    const session = this.getById(sessionRecordId);
+    if (!session || session.codexHomeDir) {
+      return session;
+    }
+
+    const runtime = this.createRuntimeFields(sessionRecordId);
+    this.db
+      .prepare(
+        `
+        UPDATE codex_session_records
+        SET codex_home_dir = @codexHomeDir,
+            codex_home_seed_mode = @codexHomeSeedMode,
+            sandbox_mode = @sandboxMode,
+            updated_at = @updatedAt
+        WHERE id = @id
+      `
+      )
+      .run({
+        id: sessionRecordId,
+        ...runtime,
+        updatedAt: Date.now()
+      });
+    return this.getById(sessionRecordId);
+  }
+
   private ensureConversation(input: GetOrCreateActiveSessionInput, now: number): void {
     this.db
       .prepare(
@@ -300,6 +355,27 @@ export class SessionBindingRepository {
         updatedAt: now
       });
   }
+
+  private createRuntimeFields(sessionRecordId: string): {
+    codexHomeDir: string | null;
+    codexHomeSeedMode: string | null;
+    sandboxMode: string | null;
+  } {
+    if (this.runtimeOptions.codexSessionHomeMode === "disabled") {
+      return {
+        codexHomeDir: null,
+        codexHomeSeedMode: null,
+        sandboxMode: normalizeBlank(this.runtimeOptions.sandboxMode)
+      };
+    }
+
+    const root = resolve(this.runtimeOptions.codexSessionHomeRoot ?? "./data/codex-homes");
+    return {
+      codexHomeDir: resolve(root, sanitizePathSegment(sessionRecordId)),
+      codexHomeSeedMode: this.runtimeOptions.codexHomeSeedMode ?? "copy-auth-only",
+      sandboxMode: normalizeBlank(this.runtimeOptions.sandboxMode)
+    };
+  }
 }
 
 function mapSessionRow(row: SessionRow): CodexSessionRecord {
@@ -309,6 +385,9 @@ function mapSessionRow(row: SessionRow): CodexSessionRecord {
     openimDisplayUserId: row.openim_display_user_id,
     codexSessionId: row.codex_session_id,
     codexProjectPath: row.codex_project_path,
+    codexHomeDir: row.codex_home_dir,
+    codexHomeSeedMode: row.codex_home_seed_mode,
+    sandboxMode: row.sandbox_mode,
     isActive: row.is_active === 1,
     status: row.status,
     parentSessionRecordId: row.parent_session_record_id,
@@ -317,4 +396,12 @@ function mapSessionRow(row: SessionRow): CodexSessionRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function sanitizePathSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9_.-]/g, "_");
+}
+
+function normalizeBlank(value: string | undefined): string | null {
+  return value && value.trim().length > 0 ? value.trim() : null;
 }

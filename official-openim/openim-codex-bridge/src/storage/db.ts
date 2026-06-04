@@ -53,6 +53,9 @@ function migrate(db: BridgeDatabase): void {
       openim_display_user_id TEXT NOT NULL,
       codex_session_id TEXT,
       codex_project_path TEXT NOT NULL,
+      codex_home_dir TEXT,
+      codex_home_seed_mode TEXT,
+      sandbox_mode TEXT,
       is_active INTEGER NOT NULL,
       status TEXT NOT NULL,
       parent_session_record_id TEXT,
@@ -117,6 +120,9 @@ function migrate(db: BridgeDatabase): void {
   ensureColumn(db, "runtime_jobs", "cancel_method", "TEXT");
   ensureColumn(db, "runtime_jobs", "failure_reason", "TEXT");
   ensureColumn(db, "runtime_jobs", "retry_of_job_id", "TEXT");
+  ensureColumn(db, "codex_session_records", "codex_home_dir", "TEXT");
+  ensureColumn(db, "codex_session_records", "codex_home_seed_mode", "TEXT");
+  ensureColumn(db, "codex_session_records", "sandbox_mode", "TEXT");
 }
 
 function ensureColumn(db: BridgeDatabase, tableName: string, columnName: string, columnType: string): void {

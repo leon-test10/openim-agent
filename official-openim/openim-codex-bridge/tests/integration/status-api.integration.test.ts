@@ -12,7 +12,7 @@ import { RuntimeEventRepository } from "../../src/core/runtime-event.repository.
 import { createServer } from "../../src/server.js";
 import type { AppContext } from "../../src/app-context.js";
 import type { SemanticEvent } from "../../src/core/semantic-event.js";
-import type { CodexCliAdapter, CodexRunHandle, CodexRunResult } from "../../src/adapters/codex/codex-types.js";
+import type { CodexCliAdapter, CodexRunHandle, CodexRunInput, CodexRunResult } from "../../src/adapters/codex/codex-types.js";
 
 const tempDirs: string[] = [];
 
@@ -26,24 +26,35 @@ function createTempContext(overrides: Partial<Pick<AppContext, "codex" | "openim
   const dir = mkdtempSync(join(tmpdir(), "openim-codex-bridge-api-"));
   tempDirs.push(dir);
   const db = openDatabase(`file:${join(dir, "bridge.sqlite")}`);
+  const config = {
+    PORT: 8787,
+    OPENIM_API_BASE_URL: "http://127.0.0.1:10002",
+    OPENIM_ADMIN_USER_ID: "imAdmin",
+    OPENIM_ADMIN_SECRET: "openIM123",
+    OPENIM_ADMIN_TOKEN: "",
+    OPENIM_BOT_USER_ID: "codex_bot",
+    CODEX_BIN: "codex",
+    CODEX_DEFAULT_PROJECT_PATH: "/workspace/demo",
+    CODEX_DEFAULT_MODEL: "",
+    CODEX_EXEC_TIMEOUT_MS: 600000,
+    CODEX_SESSION_HOME_ROOT: join(dir, "codex-homes"),
+    CODEX_SESSION_HOME_MODE: "per-session" as const,
+    CODEX_SESSION_HOME_SEED_MODE: "copy-auth-only" as const,
+    CODEX_BASE_HOME: "",
+    CODEX_SANDBOX_MODE: "",
+    DATABASE_URL: `file:${join(dir, "bridge.sqlite")}`,
+    LOG_LEVEL: "silent"
+  };
   return {
-    config: {
-      PORT: 8787,
-      OPENIM_API_BASE_URL: "http://127.0.0.1:10002",
-      OPENIM_ADMIN_USER_ID: "imAdmin",
-      OPENIM_ADMIN_SECRET: "openIM123",
-      OPENIM_ADMIN_TOKEN: "",
-      OPENIM_BOT_USER_ID: "codex_bot",
-      CODEX_BIN: "codex",
-      CODEX_DEFAULT_PROJECT_PATH: "/workspace/demo",
-      CODEX_DEFAULT_MODEL: "",
-      CODEX_EXEC_TIMEOUT_MS: 600000,
-      DATABASE_URL: `file:${join(dir, "bridge.sqlite")}`,
-      LOG_LEVEL: "silent"
-    },
+    config,
     db,
     semanticEvents: new SemanticEventRepository(db),
-    sessions: new SessionBindingRepository(db),
+    sessions: new SessionBindingRepository(db, {
+      codexSessionHomeMode: config.CODEX_SESSION_HOME_MODE,
+      codexSessionHomeRoot: config.CODEX_SESSION_HOME_ROOT,
+      codexHomeSeedMode: config.CODEX_SESSION_HOME_SEED_MODE,
+      sandboxMode: config.CODEX_SANDBOX_MODE
+    }),
     jobs: new RuntimeJobRepository(db),
     runtimeEvents: new RuntimeEventRepository(db),
     codex: overrides.codex ?? {
@@ -508,10 +519,12 @@ describe("status API", () => {
   });
 
   it("records Codex adapter runtime events while a webhook job runs", async () => {
+    let capturedInput: CodexRunInput | null = null;
     const codex: CodexCliAdapter = {
       runNewTask: async () => ({ ok: true, outputText: "unused", rawOutput: "" }),
       resumeTask: async () => ({ ok: true, outputText: "unused", rawOutput: "" }),
       runNewTaskCancellable: (input): CodexRunHandle => {
+        capturedInput = input;
         input.onEvent?.({ type: "agent_message", message: "thinking visibly" });
         input.onEvent?.({
           type: "item.started",
@@ -560,6 +573,88 @@ describe("status API", () => {
         summary: "shell: git status --short"
       }
     ]);
+    expect(capturedInput?.codexHomeDir).toContain("codex-homes");
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("falls back to a new Codex task when an isolated home cannot resume an old rollout", async () => {
+    let resumeCalls = 0;
+    let newTaskCalls = 0;
+    const codex: CodexCliAdapter = {
+      runNewTask: async () => ({ ok: true, outputText: "unused", rawOutput: "" }),
+      resumeTask: async () => ({ ok: true, outputText: "unused", rawOutput: "" }),
+      resumeTaskCancellable: (): CodexRunHandle => {
+        resumeCalls += 1;
+        return {
+          pid: 1234,
+          promise: Promise.resolve({
+            ok: false,
+            outputText: "",
+            rawOutput: "",
+            errorText: "Error: thread/resume: thread/resume failed: no rollout found for thread id old_thread",
+            exitCode: 1
+          }),
+          cancel: async () => undefined
+        };
+      },
+      runNewTaskCancellable: (): CodexRunHandle => {
+        newTaskCalls += 1;
+        return {
+          pid: 1235,
+          promise: Promise.resolve({
+            ok: true,
+            sessionId: "new_thread",
+            outputText: "fallback ok",
+            rawOutput: ""
+          }),
+          cancel: async () => undefined
+        };
+      }
+    };
+    const sentTexts: string[] = [];
+    const context = createTempContext({
+      codex,
+      openimSender: {
+        sendBotText: async (message) => {
+          sentTexts.push(message.text);
+        }
+      }
+    });
+    context.semanticEvents.insert(event);
+    const session = context.sessions.getOrCreateActiveSession({
+      openimConversationId: event.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    context.sessions.updateCodexSessionId(session.id, "old_thread");
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const webhook = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-single-msg",
+      payload: {
+        sendID: "user_1",
+        recvID: "codex_bot",
+        conversationID: event.openimConversationId,
+        contentType: 101,
+        content: JSON.stringify({ content: "please continue" })
+      }
+    });
+    const jobId = webhook.json().data.jobId as string;
+    await waitFor(() => context.jobs.getById(jobId)?.status === "succeeded");
+
+    expect(resumeCalls).toBe(1);
+    expect(newTaskCalls).toBe(1);
+    expect(context.jobs.getById(jobId)).toMatchObject({
+      status: "succeeded",
+      outputText: "fallback ok",
+      codexSessionIdBefore: "old_thread",
+      codexSessionIdAfter: "new_thread"
+    });
+    expect(context.sessions.getById(session.id)?.codexSessionId).toBe("new_thread");
+    expect(sentTexts).toContain("fallback ok");
 
     await app.close();
     context.db.close();

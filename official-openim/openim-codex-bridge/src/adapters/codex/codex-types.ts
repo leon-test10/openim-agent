@@ -2,6 +2,8 @@ export interface CodexRunInput {
   projectPath: string;
   prompt: string;
   model?: string;
+  codexHomeDir?: string;
+  sandboxMode?: string;
   onEvent?: (event: Record<string, unknown>) => void;
 }
 
@@ -10,6 +12,8 @@ export interface CodexResumeInput {
   sessionId: string;
   prompt: string;
   model?: string;
+  codexHomeDir?: string;
+  sandboxMode?: string;
   onEvent?: (event: Record<string, unknown>) => void;
 }
 

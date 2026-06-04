@@ -9,6 +9,9 @@ export interface BindingSummary {
   activeSessionRecordId: string;
   codexSessionId: string | null;
   codexProjectPath: string;
+  codexHomeDir: string | null;
+  codexHomeSeedMode: CodexSessionRecord["codexHomeSeedMode"];
+  sandboxMode: string | null;
   sessionStatus: CodexSessionRecord["status"];
   latestJobId: string | null;
   latestJobStatus: RuntimeJob["status"] | null;

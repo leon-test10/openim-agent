@@ -4,6 +4,9 @@ export interface CodexSessionRecord {
   openimDisplayUserId: string;
   codexSessionId: string | null;
   codexProjectPath: string;
+  codexHomeDir: string | null;
+  codexHomeSeedMode: "copy-auth-only" | "copy-auth-and-config" | "none" | null;
+  sandboxMode: string | null;
   isActive: boolean;
   status: "active" | "paused" | "archived" | "error";
   parentSessionRecordId: string | null;
@@ -12,4 +15,3 @@ export interface CodexSessionRecord {
   createdAt: number;
   updatedAt: number;
 }
-

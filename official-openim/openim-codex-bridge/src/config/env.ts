@@ -12,6 +12,11 @@ const EnvSchema = z.object({
   CODEX_DEFAULT_PROJECT_PATH: z.string().default("/workspace/openim-demo"),
   CODEX_DEFAULT_MODEL: z.string().optional().default(""),
   CODEX_EXEC_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
+  CODEX_SESSION_HOME_ROOT: z.string().default("./data/codex-homes"),
+  CODEX_SESSION_HOME_MODE: z.enum(["per-session", "disabled"]).default("per-session"),
+  CODEX_SESSION_HOME_SEED_MODE: z.enum(["copy-auth-only", "copy-auth-and-config", "none"]).default("copy-auth-only"),
+  CODEX_BASE_HOME: z.string().optional().default(""),
+  CODEX_SANDBOX_MODE: z.string().optional().default(""),
   DATABASE_URL: z.string().default("file:./data/openim-codex-bridge.sqlite"),
   LOG_LEVEL: z.string().default("info")
 });
@@ -21,4 +26,3 @@ export type AppConfig = z.infer<typeof EnvSchema>;
 export function loadEnv(): AppConfig {
   return EnvSchema.parse(process.env);
 }
-

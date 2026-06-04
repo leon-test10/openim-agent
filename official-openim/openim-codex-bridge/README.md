@@ -127,6 +127,11 @@ CODEX_BIN=codex
 CODEX_DEFAULT_PROJECT_PATH=/workspace/openim-demo
 CODEX_DEFAULT_MODEL=
 CODEX_EXEC_TIMEOUT_MS=600000
+CODEX_SESSION_HOME_ROOT=./data/codex-homes
+CODEX_SESSION_HOME_MODE=per-session
+CODEX_SESSION_HOME_SEED_MODE=copy-auth-only
+CODEX_BASE_HOME=
+CODEX_SANDBOX_MODE=
 
 DATABASE_URL=file:./data/openim-codex-bridge.sqlite
 LOG_LEVEL=info
@@ -177,6 +182,17 @@ The bridge supports one OpenIM conversation with multiple Codex session records.
 On the first accepted message, the bridge creates an active session record with no `codex_session_id`. After the first Codex run returns a session id, the record is updated. Later messages resume that active Codex session.
 
 Fork/rebind is only modeled for future use with reserved source fields. MVP does not expose IM-triggered fork and does not share one Codex session across OpenIM conversations.
+
+Each session record can also own an isolated Codex runtime home. With the default
+`CODEX_SESSION_HOME_MODE=per-session`, new records get a stable `codexHomeDir`
+under `CODEX_SESSION_HOME_ROOT`; the worker sets `CODEX_HOME` to that directory
+when spawning `codex exec`. The default seed mode copies only auth seed files
+from `CODEX_BASE_HOME` or the user's global `.codex` directory, and does not copy
+global logs, history, caches, or plugin runtime output.
+
+Set `CODEX_SANDBOX_MODE=read-only` or `CODEX_SANDBOX_MODE=workspace-write` to
+pass an explicit `--sandbox` value to `codex exec`. Leave it blank to use the
+Codex CLI default.
 
 Cancelling a job does not archive or clear the active session record. If the bridge has already
 saved a `codex_session_id`, the next accepted message resumes that session. If a first run is
@@ -335,10 +351,14 @@ codes for read-only and workspace-write modes:
 ```powershell
 ..\deploy\windows\diagnose-codex-cli.ps1 `
   -ProjectPath D:\agent_trial\claude_code\official-openim `
-  -OutputDir D:\agent_trial\claude_code\official-openim\diagnostics\codex-cli
+  -OutputDir D:\agent_trial\claude_code\official-openim\diagnostics\codex-cli `
+  -CodexHomeDir D:\agent_trial\claude_code\official-openim\diagnostics\codex-home-isolated `
+  -SeedMode copy-auth-only
 ```
 
-The script writes diagnostics under `diagnostics/codex-cli` and does not edit `$CODEX_HOME`.
+The script writes diagnostics under `diagnostics/codex-cli`, optionally runs with
+an isolated `CODEX_HOME`, and restores the original process environment when it
+finishes. It does not edit the global Codex home.
 
 ## Development
 
