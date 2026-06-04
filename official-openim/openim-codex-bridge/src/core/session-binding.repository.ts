@@ -13,6 +13,9 @@ interface SessionRow {
   codex_home_dir: string | null;
   codex_home_seed_mode: CodexSessionRecord["codexHomeSeedMode"];
   sandbox_mode: string | null;
+  display_name: string | null;
+  display_name_source: CodexSessionRecord["displayNameSource"];
+  last_summary: string | null;
   is_active: number;
   status: "active" | "paused" | "archived" | "error";
   parent_session_record_id: string | null;
@@ -26,6 +29,8 @@ export interface GetOrCreateActiveSessionInput {
   openimConversationId: string;
   openimDisplayUserId: string;
   codexProjectPath: string;
+  displayName?: string | null;
+  lastSummary?: string | null;
 }
 
 export interface RebindConversationInput extends GetOrCreateActiveSessionInput {
@@ -79,11 +84,13 @@ export class SessionBindingRepository {
           INSERT INTO codex_session_records (
             id, openim_conversation_id, openim_display_user_id, codex_session_id,
             codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode,
+            display_name, display_name_source, last_summary,
             is_active, status, parent_session_record_id,
             forked_from_codex_session_id, created_reason, created_at, updated_at
           ) VALUES (
             @id, @openimConversationId, @openimDisplayUserId, NULL,
             @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode,
+            @displayName, @displayNameSource, @lastSummary,
             1, 'active', NULL,
             NULL, 'auto_created_from_openim_message', @createdAt, @updatedAt
           )
@@ -94,6 +101,9 @@ export class SessionBindingRepository {
           openimConversationId: input.openimConversationId,
           openimDisplayUserId: input.openimDisplayUserId,
           codexProjectPath: input.codexProjectPath,
+          displayName: normalizeBlank(input.displayName ?? undefined),
+          displayNameSource: normalizeBlank(input.displayName ?? undefined) ? "auto" : null,
+          lastSummary: normalizeBlank(input.lastSummary ?? undefined),
           ...runtime,
           createdAt: now,
           updatedAt: now
@@ -175,11 +185,13 @@ export class SessionBindingRepository {
         INSERT INTO codex_session_records (
           id, openim_conversation_id, openim_display_user_id, codex_session_id,
           codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode,
+          display_name, display_name_source, last_summary,
           is_active, status, parent_session_record_id,
           forked_from_codex_session_id, created_reason, created_at, updated_at
         ) VALUES (
           @id, @openimConversationId, @openimDisplayUserId, NULL,
           @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode,
+          @displayName, @displayNameSource, @lastSummary,
           0, 'active', NULL,
           NULL, 'manual_new_session', @createdAt, @updatedAt
         )
@@ -190,6 +202,9 @@ export class SessionBindingRepository {
         openimConversationId: input.openimConversationId,
         openimDisplayUserId: input.openimDisplayUserId,
         codexProjectPath: input.codexProjectPath,
+        displayName: normalizeBlank(input.displayName ?? undefined),
+        displayNameSource: normalizeBlank(input.displayName ?? undefined) ? "auto" : null,
+        lastSummary: normalizeBlank(input.lastSummary ?? undefined),
         ...runtime,
         createdAt: now,
         updatedAt: now
@@ -219,11 +234,13 @@ export class SessionBindingRepository {
           INSERT INTO codex_session_records (
             id, openim_conversation_id, openim_display_user_id, codex_session_id,
             codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode,
+            display_name, display_name_source, last_summary,
             is_active, status, parent_session_record_id,
             forked_from_codex_session_id, created_reason, created_at, updated_at
           ) VALUES (
             @id, @openimConversationId, @openimDisplayUserId, @codexSessionId,
             @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode,
+            @displayName, @displayNameSource, @lastSummary,
             1, 'active', @parentSessionRecordId,
             @forkedFromCodexSessionId, 'manual_rebind', @createdAt, @updatedAt
           )
@@ -235,6 +252,9 @@ export class SessionBindingRepository {
           openimDisplayUserId: input.openimDisplayUserId,
           codexSessionId: input.codexSessionId ?? null,
           codexProjectPath: input.codexProjectPath,
+          displayName: normalizeBlank(input.displayName ?? undefined),
+          displayNameSource: normalizeBlank(input.displayName ?? undefined) ? "auto" : null,
+          lastSummary: normalizeBlank(input.lastSummary ?? undefined),
           ...runtime,
           parentSessionRecordId: previous?.id ?? null,
           forkedFromCodexSessionId: previous?.codexSessionId ?? null,
@@ -262,6 +282,24 @@ export class SessionBindingRepository {
       )
       .run(now, active.id);
     return this.getById(active.id);
+  }
+
+  archiveSession(openimConversationId: string, sessionRecordId: string): CodexSessionRecord | null {
+    const target = this.getById(sessionRecordId);
+    if (!target || target.openimConversationId !== openimConversationId) {
+      return null;
+    }
+    const now = Date.now();
+    this.db
+      .prepare(
+        `
+        UPDATE codex_session_records
+        SET is_active = 0, status = 'archived', updated_at = ?
+        WHERE id = ?
+      `
+      )
+      .run(now, sessionRecordId);
+    return this.getById(sessionRecordId);
   }
 
   activateSession(openimConversationId: string, sessionRecordId: string): CodexSessionRecord {
@@ -308,6 +346,48 @@ export class SessionBindingRepository {
       `
       )
       .run(codexSessionId, Date.now(), sessionRecordId);
+  }
+
+  updateDisplayName(sessionRecordId: string, displayName: string): CodexSessionRecord | null {
+    const normalized = normalizeDisplayText(displayName, 80);
+    this.db
+      .prepare(
+        `
+        UPDATE codex_session_records
+        SET display_name = ?, display_name_source = 'manual', updated_at = ?
+        WHERE id = ?
+      `
+      )
+      .run(normalized, Date.now(), sessionRecordId);
+    return this.getById(sessionRecordId);
+  }
+
+  updateAutoSummary(sessionRecordId: string, input: { displayName?: string | null; lastSummary?: string | null }): void {
+    const session = this.getById(sessionRecordId);
+    if (!session) {
+      return;
+    }
+    const displayName = normalizeDisplayText(input.displayName ?? "", 80);
+    const lastSummary = normalizeDisplayText(input.lastSummary ?? "", 160);
+    if (!displayName && !lastSummary) {
+      return;
+    }
+    const nextDisplayName =
+      session.displayNameSource === "manual" || !displayName ? session.displayName : displayName;
+    const nextDisplayNameSource =
+      session.displayNameSource === "manual" ? "manual" : nextDisplayName ? "auto" : null;
+    this.db
+      .prepare(
+        `
+        UPDATE codex_session_records
+        SET display_name = ?,
+            display_name_source = ?,
+            last_summary = COALESCE(?, last_summary),
+            updated_at = ?
+        WHERE id = ?
+      `
+      )
+      .run(nextDisplayName, nextDisplayNameSource, lastSummary || null, Date.now(), sessionRecordId);
   }
 
   ensureRuntimeFields(sessionRecordId: string): CodexSessionRecord | null {
@@ -388,6 +468,9 @@ function mapSessionRow(row: SessionRow): CodexSessionRecord {
     codexHomeDir: row.codex_home_dir,
     codexHomeSeedMode: row.codex_home_seed_mode,
     sandboxMode: row.sandbox_mode,
+    displayName: row.display_name,
+    displayNameSource: row.display_name_source,
+    lastSummary: row.last_summary,
     isActive: row.is_active === 1,
     status: row.status,
     parentSessionRecordId: row.parent_session_record_id,
@@ -404,4 +487,12 @@ function sanitizePathSegment(value: string): string {
 
 function normalizeBlank(value: string | undefined): string | null {
   return value && value.trim().length > 0 ? value.trim() : null;
+}
+
+function normalizeDisplayText(value: string, maxLength: number): string | null {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
 }

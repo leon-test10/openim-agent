@@ -189,6 +189,10 @@ export class CodexRunnerWorker {
       if (result.sessionId) {
         this.context.sessions.updateCodexSessionId(session.id, result.sessionId);
       }
+      this.context.sessions.updateAutoSummary(session.id, {
+        displayName: job.inputText,
+        lastSummary: result.outputText
+      });
       this.context.jobs.markSucceeded(jobId, {
         outputText: result.outputText,
         codexSessionIdAfter: result.sessionId ?? session.codexSessionId

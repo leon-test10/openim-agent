@@ -322,6 +322,82 @@ describe("status API", () => {
     context.db.close();
   });
 
+  it("creates, activates, renames, and archives session records", async () => {
+    const context = createTempContext();
+    context.semanticEvents.insert(event);
+    const original = context.sessions.getOrCreateActiveSession({
+      openimConversationId: event.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo",
+      displayName: "Original session"
+    });
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions`,
+      payload: {
+        openimDisplayUserId: "user_1",
+        codexProjectPath: "/workspace/new",
+        displayName: "Investigate startup failure"
+      }
+    });
+    expect(created.statusCode).toBe(201);
+    const createdBody = created.json();
+    expect(createdBody).toMatchObject({
+      openimConversationId: event.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/new",
+      displayName: "Investigate startup failure",
+      displayNameSource: "auto",
+      isActive: true,
+      status: "active"
+    });
+    expect(context.sessions.getById(original.id)?.isActive).toBe(false);
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions/${createdBody.id}`,
+      payload: { displayName: "Startup failure triage" }
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toMatchObject({
+      id: createdBody.id,
+      displayName: "Startup failure triage",
+      displayNameSource: "manual"
+    });
+
+    const archived = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions/${createdBody.id}/archive`
+    });
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json()).toMatchObject({
+      id: createdBody.id,
+      isActive: false,
+      status: "archived"
+    });
+
+    const sessions = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions`
+    });
+    expect(sessions.statusCode).toBe(200);
+    expect(sessions.json().sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: createdBody.id,
+          displayName: "Startup failure triage",
+          displayNameSource: "manual",
+          status: "archived"
+        })
+      ])
+    );
+
+    await app.close();
+    context.db.close();
+  });
+
   it("rejects rebind and archive while a job is active", async () => {
     const context = createTempContext();
     context.semanticEvents.insert(event);

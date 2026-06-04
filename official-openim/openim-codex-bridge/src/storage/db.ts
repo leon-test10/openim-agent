@@ -56,6 +56,9 @@ function migrate(db: BridgeDatabase): void {
       codex_home_dir TEXT,
       codex_home_seed_mode TEXT,
       sandbox_mode TEXT,
+      display_name TEXT,
+      display_name_source TEXT,
+      last_summary TEXT,
       is_active INTEGER NOT NULL,
       status TEXT NOT NULL,
       parent_session_record_id TEXT,
@@ -123,6 +126,9 @@ function migrate(db: BridgeDatabase): void {
   ensureColumn(db, "codex_session_records", "codex_home_dir", "TEXT");
   ensureColumn(db, "codex_session_records", "codex_home_seed_mode", "TEXT");
   ensureColumn(db, "codex_session_records", "sandbox_mode", "TEXT");
+  ensureColumn(db, "codex_session_records", "display_name", "TEXT");
+  ensureColumn(db, "codex_session_records", "display_name_source", "TEXT");
+  ensureColumn(db, "codex_session_records", "last_summary", "TEXT");
 }
 
 function ensureColumn(db: BridgeDatabase, tableName: string, columnName: string, columnType: string): void {

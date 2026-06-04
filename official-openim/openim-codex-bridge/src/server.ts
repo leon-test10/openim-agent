@@ -48,7 +48,9 @@ export async function createServer(context: AppContext, logger: Logger) {
     const session = context.sessions.getOrCreateActiveSession({
       openimConversationId: event.openimConversationId,
       openimDisplayUserId: event.senderUserId,
-      codexProjectPath: context.config.CODEX_DEFAULT_PROJECT_PATH
+      codexProjectPath: context.config.CODEX_DEFAULT_PROJECT_PATH,
+      displayName: summarizeUserText(event.text),
+      lastSummary: summarizeUserText(event.text, 120)
     });
     const job = context.jobs.createQueuedJob({
       sessionRecordId: session.id,
@@ -91,7 +93,9 @@ export async function createServer(context: AppContext, logger: Logger) {
     const session = context.sessions.getOrCreateActiveSession({
       openimConversationId: event.openimConversationId,
       openimDisplayUserId: event.senderUserId,
-      codexProjectPath: context.config.CODEX_DEFAULT_PROJECT_PATH
+      codexProjectPath: context.config.CODEX_DEFAULT_PROJECT_PATH,
+      displayName: summarizeUserText(event.text),
+      lastSummary: summarizeUserText(event.text, 120)
     });
     const job = context.jobs.createQueuedJob({
       sessionRecordId: session.id,
@@ -262,7 +266,9 @@ export async function createServer(context: AppContext, logger: Logger) {
         optionalString(body.codexProjectPath) ??
         activeSession?.codexProjectPath ??
         context.config.CODEX_DEFAULT_PROJECT_PATH,
-      codexSessionId: optionalString(body.codexSessionId)
+      codexSessionId: optionalString(body.codexSessionId),
+      displayName: summarizeUserText(optionalString(body.displayName) ?? "New session"),
+      lastSummary: summarizeUserText(optionalString(body.displayName) ?? "Manual rebind", 120)
     });
 
     return reply.code(201).send({
@@ -344,9 +350,12 @@ export async function createServer(context: AppContext, logger: Logger) {
     const session = context.sessions.createAdditionalSession({
       openimConversationId: conversationId,
       openimDisplayUserId: displayUserId,
-      codexProjectPath: optionalString(body.codexProjectPath) ?? context.config.CODEX_DEFAULT_PROJECT_PATH
+      codexProjectPath: optionalString(body.codexProjectPath) ?? active?.codexProjectPath ?? context.config.CODEX_DEFAULT_PROJECT_PATH,
+      displayName: summarizeUserText(optionalString(body.displayName) ?? "New session"),
+      lastSummary: summarizeUserText(optionalString(body.displayName) ?? "Manual new session", 120)
     });
-    return reply.code(201).send(session);
+    const activated = context.sessions.activateSession(conversationId, session.id);
+    return reply.code(201).send(activated);
   });
 
   app.post("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/activate", async (request) => {
@@ -356,6 +365,45 @@ export async function createServer(context: AppContext, logger: Logger) {
     };
     const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
     return context.sessions.activateSession(conversationId, sessionRecordId);
+  });
+
+  app.patch("/api/conversations/:conversationId/codex-sessions/:sessionRecordId", async (request, reply) => {
+    const { conversationId: rawConversationId, sessionRecordId } = request.params as {
+      conversationId: string;
+      sessionRecordId: string;
+    };
+    const body = isRecord(request.body) ? request.body : {};
+    const displayName = optionalString(body.displayName);
+    if (!displayName) {
+      return reply.badRequest("displayName is required");
+    }
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const session = context.sessions.getById(sessionRecordId);
+    if (!session || session.openimConversationId !== conversationId) {
+      return reply.notFound("session record not found");
+    }
+    return context.sessions.updateDisplayName(sessionRecordId, displayName);
+  });
+
+  app.post("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/archive", async (request, reply) => {
+    const { conversationId: rawConversationId, sessionRecordId } = request.params as {
+      conversationId: string;
+      sessionRecordId: string;
+    };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const activeJob = context.jobs.getActiveByConversationId(conversationId);
+    if (activeJob) {
+      return reply.code(409).send({
+        error: "active job exists",
+        message: "Cannot archive a session while a runtime job is queued, running, or cancelling.",
+        activeJob
+      });
+    }
+    const archived = context.sessions.archiveSession(conversationId, sessionRecordId);
+    if (!archived) {
+      return reply.notFound("session record not found");
+    }
+    return archived;
   });
 
   return app;
@@ -376,6 +424,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function summarizeUserText(value: string | null | undefined, maxLength = 40): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
 }
 
 function normalizeOpenImConversationId(conversationId: string, botUserId: string): string {
