@@ -84,6 +84,41 @@ const event: SemanticEvent = {
 };
 
 describe("status API", () => {
+  it("exposes bridge metadata and capabilities", async () => {
+    const context = createTempContext();
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const meta = await app.inject({ method: "GET", url: "/api/meta" });
+    expect(meta.statusCode).toBe(200);
+    expect(meta.json()).toMatchObject({
+      name: "openim-codex-bridge",
+      capabilities: {
+        sessionMetadata: true,
+        sessionActivate: true,
+        sessionRename: true,
+        sessionArchive: true
+      }
+    });
+
+    const health = await app.inject({ method: "GET", url: "/healthz" });
+    expect(health.statusCode).toBe(200);
+    expect(health.json()).toMatchObject({ ok: true, apiVersion: "2026-06-05.phase3g" });
+
+    const preflight = await app.inject({
+      method: "OPTIONS",
+      url: "/api/conversations/single%3Acodex_bot%3Auser_1/codex-sessions/csr_1",
+      headers: {
+        origin: "http://127.0.0.1:5173",
+        "access-control-request-method": "PATCH"
+      }
+    });
+    expect(preflight.statusCode).toBe(204);
+    expect(preflight.headers["access-control-allow-methods"]).toContain("PATCH");
+
+    await app.close();
+    context.db.close();
+  });
+
   it("returns bindings and detailed binding status for known conversations", async () => {
     const context = createTempContext();
     context.semanticEvents.insert(event);
@@ -398,6 +433,64 @@ describe("status API", () => {
     context.db.close();
   });
 
+  it("returns structured session API errors", async () => {
+    const context = createTempContext();
+    context.semanticEvents.insert(event);
+    const session = context.sessions.getOrCreateActiveSession({
+      openimConversationId: event.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const rename = await app.inject({
+      method: "PATCH",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions/${session.id}`,
+      payload: {}
+    });
+    expect(rename.statusCode).toBe(400);
+    expect(rename.json()).toMatchObject({
+      error: "display_name_required",
+      message: "displayName is required."
+    });
+
+    const activateMissing = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions/missing/activate`,
+      payload: {}
+    });
+    expect(activateMissing.statusCode).toBe(404);
+    expect(activateMissing.json()).toMatchObject({
+      error: "session_not_found",
+      message: "Session record not found."
+    });
+
+    context.jobs.createQueuedJob({
+      sessionRecordId: session.id,
+      semanticEventId: event.id,
+      openimConversationId: event.openimConversationId,
+      inputText: "queued",
+      codexSessionIdBefore: null
+    });
+    const created = context.sessions.createAdditionalSession({
+      openimConversationId: event.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    const activateBlocked = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions/${created.id}/activate`,
+      payload: {}
+    });
+    expect(activateBlocked.statusCode).toBe(409);
+    expect(activateBlocked.json()).toMatchObject({
+      error: "active_job_exists"
+    });
+
+    await app.close();
+    context.db.close();
+  });
+
   it("rejects rebind and archive while a job is active", async () => {
     const context = createTempContext();
     context.semanticEvents.insert(event);
@@ -421,14 +514,14 @@ describe("status API", () => {
       payload: { codexProjectPath: "/workspace/other" }
     });
     expect(rebind.statusCode).toBe(409);
-    expect(rebind.json()).toMatchObject({ error: "active job exists" });
+    expect(rebind.json()).toMatchObject({ error: "active_job_exists" });
 
     const archive = await app.inject({
       method: "POST",
       url: `/api/bindings/${encodeURIComponent(event.openimConversationId)}/archive`
     });
     expect(archive.statusCode).toBe(409);
-    expect(archive.json()).toMatchObject({ error: "active job exists" });
+    expect(archive.json()).toMatchObject({ error: "active_job_exists" });
 
     await app.close();
     context.db.close();

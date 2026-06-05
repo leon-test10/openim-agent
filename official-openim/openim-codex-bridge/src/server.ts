@@ -8,16 +8,33 @@ import { parseAfterSendSingleMsgPayload } from "./adapters/openim/openim-message
 import { CodexRunnerWorker } from "./workers/codex-runner.worker.js";
 import { deriveConversationState, toRuntimeJobView } from "./core/conversation-status.js";
 
+const BRIDGE_META = {
+  name: "openim-codex-bridge",
+  version: "0.1.0",
+  apiVersion: "2026-06-05.phase3g",
+  capabilities: {
+    sessionMetadata: true,
+    sessionActivate: true,
+    sessionRename: true,
+    sessionArchive: true,
+    runtimeEvents: true,
+    jobCancel: true,
+    jobRetry: true
+  }
+} as const;
+
 export async function createServer(context: AppContext, logger: Logger) {
   const app = Fastify({ loggerInstance: logger });
   const worker = new CodexRunnerWorker(context, logger);
 
   await app.register(cors, {
-    origin: true
+    origin: true,
+    methods: ["GET", "POST", "PATCH", "OPTIONS"]
   });
   await app.register(sensible);
 
-  app.get("/healthz", async () => ({ ok: true }));
+  app.get("/healthz", async () => ({ ok: true, ...BRIDGE_META }));
+  app.get("/api/meta", async () => BRIDGE_META);
 
   app.post("/webhooks/openim/after-send-single-msg", async (request, reply) => {
     if (!isRecord(request.body)) {
@@ -189,18 +206,14 @@ export async function createServer(context: AppContext, logger: Logger) {
       return reply.notFound("runtime job not found");
     }
     if (source.status === "queued" || source.status === "running" || source.status === "cancelling") {
-      return reply.code(409).send({
-        error: "job is active",
-        message: "Only failed, cancelled, or completed jobs can be retried.",
+      return bridgeApiError(reply, 409, "job_active", "Only failed, cancelled, or completed jobs can be retried.", {
         sourceJob: source
       });
     }
 
     const retry = worker.retryJob(jobId);
     if (!retry) {
-      return reply.code(409).send({
-        error: "retry unavailable",
-        message: "Retry requires an active session and the original semantic event.",
+      return bridgeApiError(reply, 409, "retry_unavailable", "Retry requires an active session and the original semantic event.", {
         sourceJob: source
       });
     }
@@ -244,9 +257,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
     const activeJob = context.jobs.getActiveByConversationId(conversationId);
     if (activeJob) {
-      return reply.code(409).send({
-        error: "active job exists",
-        message: "Cannot rebind while a runtime job is queued, running, or cancelling.",
+      return bridgeApiError(reply, 409, "active_job_exists", "Cannot rebind while a runtime job is queued, running, or cancelling.", {
         activeJob
       });
     }
@@ -286,9 +297,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
     const activeJob = context.jobs.getActiveByConversationId(conversationId);
     if (activeJob) {
-      return reply.code(409).send({
-        error: "active job exists",
-        message: "Cannot archive while a runtime job is queued, running, or cancelling.",
+      return bridgeApiError(reply, 409, "active_job_exists", "Cannot archive while a runtime job is queued, running, or cancelling.", {
         activeJob
       });
     }
@@ -358,12 +367,27 @@ export async function createServer(context: AppContext, logger: Logger) {
     return reply.code(201).send(activated);
   });
 
-  app.post("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/activate", async (request) => {
+  app.post("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/activate", async (request, reply) => {
     const { conversationId: rawConversationId, sessionRecordId } = request.params as {
       conversationId: string;
       sessionRecordId: string;
     };
     const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const activeJob = context.jobs.getActiveByConversationId(conversationId);
+    if (activeJob) {
+      return bridgeApiError(reply, 409, "active_job_exists", "Cannot activate a session while a runtime job is queued, running, or cancelling.", {
+        activeJob
+      });
+    }
+    const session = context.sessions.getById(sessionRecordId);
+    if (!session || session.openimConversationId !== conversationId) {
+      return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
+    }
+    if (session.status === "archived") {
+      return bridgeApiError(reply, 409, "session_archived", "Archived sessions cannot be activated.", {
+        session
+      });
+    }
     return context.sessions.activateSession(conversationId, sessionRecordId);
   });
 
@@ -375,12 +399,12 @@ export async function createServer(context: AppContext, logger: Logger) {
     const body = isRecord(request.body) ? request.body : {};
     const displayName = optionalString(body.displayName);
     if (!displayName) {
-      return reply.badRequest("displayName is required");
+      return bridgeApiError(reply, 400, "display_name_required", "displayName is required.");
     }
     const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
     const session = context.sessions.getById(sessionRecordId);
     if (!session || session.openimConversationId !== conversationId) {
-      return reply.notFound("session record not found");
+      return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
     }
     return context.sessions.updateDisplayName(sessionRecordId, displayName);
   });
@@ -393,15 +417,13 @@ export async function createServer(context: AppContext, logger: Logger) {
     const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
     const activeJob = context.jobs.getActiveByConversationId(conversationId);
     if (activeJob) {
-      return reply.code(409).send({
-        error: "active job exists",
-        message: "Cannot archive a session while a runtime job is queued, running, or cancelling.",
+      return bridgeApiError(reply, 409, "active_job_exists", "Cannot archive a session while a runtime job is queued, running, or cancelling.", {
         activeJob
       });
     }
     const archived = context.sessions.archiveSession(conversationId, sessionRecordId);
     if (!archived) {
-      return reply.notFound("session record not found");
+      return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
     }
     return archived;
   });
@@ -426,6 +448,20 @@ function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+function bridgeApiError(
+  reply: { code: (statusCode: number) => { send: (payload: Record<string, unknown>) => unknown } },
+  statusCode: number,
+  code: string,
+  message: string,
+  details: Record<string, unknown> = {}
+) {
+  return reply.code(statusCode).send({
+    error: code,
+    message,
+    ...details
+  });
+}
+
 function summarizeUserText(value: string | null | undefined, maxLength = 40): string | null {
   if (!value) {
     return null;
@@ -434,7 +470,7 @@ function summarizeUserText(value: string | null | undefined, maxLength = 40): st
   if (!normalized) {
     return null;
   }
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
 }
 
 function normalizeOpenImConversationId(conversationId: string, botUserId: string): string {
