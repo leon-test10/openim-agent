@@ -17,6 +17,7 @@ const EnvSchema = z.object({
   CODEX_SESSION_HOME_SEED_MODE: z.enum(["copy-auth-only", "copy-auth-and-config", "none"]).default("copy-auth-only"),
   CODEX_BASE_HOME: z.string().optional().default(""),
   CODEX_SANDBOX_MODE: z.string().optional().default(""),
+  BRIDGE_SECRET_KEY: z.string().optional().default(""),
   DATABASE_URL: z.string().default("file:./data/openim-codex-bridge.sqlite"),
   LOG_LEVEL: z.string().default("info")
 });

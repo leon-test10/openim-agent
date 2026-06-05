@@ -4,6 +4,7 @@ import { SemanticEventRepository } from "./core/semantic-event.repository.js";
 import { SessionBindingRepository } from "./core/session-binding.repository.js";
 import { RuntimeJobRepository } from "./core/runtime-job.repository.js";
 import { RuntimeEventRepository } from "./core/runtime-event.repository.js";
+import { RuntimeProfileRepository } from "./core/runtime-profile.repository.js";
 import type { CodexCliAdapter } from "./adapters/codex/codex-types.js";
 import type { OpenImMessageSender } from "./adapters/openim/openim-message.sender.js";
 
@@ -14,6 +15,7 @@ export interface AppContext {
   sessions: SessionBindingRepository;
   jobs: RuntimeJobRepository;
   runtimeEvents: RuntimeEventRepository;
+  runtimeProfiles: RuntimeProfileRepository;
   codex: CodexCliAdapter;
   openimSender: OpenImMessageSender;
 }

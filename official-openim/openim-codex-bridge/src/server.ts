@@ -5,8 +5,10 @@ import type { Logger } from "pino";
 import type { AppContext } from "./app-context.js";
 import { shouldCreateRuntimeJob } from "./core/agent-decision.service.js";
 import { parseAfterSendSingleMsgPayload } from "./adapters/openim/openim-message.parser.js";
+import { buildCodexRuntimeArgs, buildCodexRuntimeEnv } from "./adapters/codex/codex-cli.adapter.js";
 import { CodexRunnerWorker } from "./workers/codex-runner.worker.js";
 import { deriveConversationState, toRuntimeJobView } from "./core/conversation-status.js";
+import type { RuntimeProfileInput } from "./core/runtime-profile.js";
 
 const BRIDGE_META = {
   name: "openim-codex-bridge",
@@ -17,9 +19,12 @@ const BRIDGE_META = {
     sessionActivate: true,
     sessionRename: true,
     sessionArchive: true,
+    sessionRestore: true,
+    sessionDelete: true,
     runtimeEvents: true,
     jobCancel: true,
-    jobRetry: true
+    jobRetry: true,
+    runtimeProfiles: true
   }
 } as const;
 
@@ -29,12 +34,83 @@ export async function createServer(context: AppContext, logger: Logger) {
 
   await app.register(cors, {
     origin: true,
-    methods: ["GET", "POST", "PATCH", "OPTIONS"]
+    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
   });
   await app.register(sensible);
 
   app.get("/healthz", async () => ({ ok: true, ...BRIDGE_META }));
   app.get("/api/meta", async () => BRIDGE_META);
+
+  app.get("/api/runtime-profiles", async (request) => {
+    const includeDeleted = parseBooleanQuery((request.query as { includeDeleted?: string }).includeDeleted);
+    return { profiles: context.runtimeProfiles.list({ includeDeleted }) };
+  });
+
+  app.post("/api/runtime-profiles", async (request, reply) => {
+    const body = isRecord(request.body) ? request.body : {};
+    const name = optionalString(body.name);
+    if (!name) {
+      return bridgeApiError(reply, 400, "name_required", "name is required.");
+    }
+    try {
+      const profile = context.runtimeProfiles.create(toRuntimeProfileInput({ ...body, name }));
+      return reply.code(201).send(profile);
+    } catch (error) {
+      return bridgeApiError(reply, 400, "runtime_profile_invalid", error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  app.patch("/api/runtime-profiles/:profileId", async (request, reply) => {
+    const { profileId } = request.params as { profileId: string };
+    const body = isRecord(request.body) ? request.body : {};
+    try {
+      const profile = context.runtimeProfiles.update(profileId, toRuntimeProfileInput(body, true));
+      if (!profile) {
+        return bridgeApiError(reply, 404, "runtime_profile_not_found", "Runtime profile not found.");
+      }
+      return profile;
+    } catch (error) {
+      return bridgeApiError(reply, 400, "runtime_profile_invalid", error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  app.delete("/api/runtime-profiles/:profileId", async (request, reply) => {
+    const { profileId } = request.params as { profileId: string };
+    const profile = context.runtimeProfiles.delete(profileId);
+    if (!profile) {
+      return bridgeApiError(reply, 404, "runtime_profile_not_found", "Runtime profile not found.");
+    }
+    return profile;
+  });
+
+  app.post("/api/runtime-profiles/:profileId/test", async (request, reply) => {
+    const { profileId } = request.params as { profileId: string };
+    const profile = context.runtimeProfiles.getWithSecret(profileId);
+    if (!profile) {
+      return bridgeApiError(reply, 404, "runtime_profile_not_found", "Runtime profile not found.");
+    }
+    const codexArgs = buildCodexRuntimeArgs({
+      model: profile.model ?? undefined,
+      sandboxMode: profile.sandboxMode ?? undefined,
+      approvalPolicy: profile.approvalPolicy ?? undefined,
+      codexProfile: profile.codexProfile ?? undefined,
+      useOss: profile.useOss,
+      localProvider: profile.localProvider ?? undefined
+    });
+    const env = buildCodexRuntimeEnv(
+      {},
+      {
+        apiKey: profile.apiKey ?? undefined,
+        baseUrl: profile.baseUrl ?? undefined
+      }
+    );
+    return {
+      ok: true,
+      profile: context.runtimeProfiles.getById(profileId),
+      codexArgs,
+      env: redactRuntimeEnv(env)
+    };
+  });
 
   app.post("/webhooks/openim/after-send-single-msg", async (request, reply) => {
     if (!isRecord(request.body)) {
@@ -278,6 +354,7 @@ export async function createServer(context: AppContext, logger: Logger) {
         activeSession?.codexProjectPath ??
         context.config.CODEX_DEFAULT_PROJECT_PATH,
       codexSessionId: optionalString(body.codexSessionId),
+      runtimeProfileId: optionalString(body.runtimeProfileId) ?? activeSession?.runtimeProfileId ?? null,
       displayName: summarizeUserText(optionalString(body.displayName) ?? "New session"),
       lastSummary: summarizeUserText(optionalString(body.displayName) ?? "Manual rebind", 120)
     });
@@ -339,9 +416,13 @@ export async function createServer(context: AppContext, logger: Logger) {
   app.get("/api/conversations/:conversationId/codex-sessions", async (request) => {
     const { conversationId: rawConversationId } = request.params as { conversationId: string };
     const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const query = request.query as { includeArchived?: string; includeDeleted?: string };
     return {
       conversationId,
-      sessions: context.sessions.listByConversationId(conversationId)
+      sessions: context.sessions.listByConversationId(conversationId, {
+        includeArchived: parseBooleanQuery(query.includeArchived, true),
+        includeDeleted: parseBooleanQuery(query.includeDeleted)
+      })
     };
   });
 
@@ -360,6 +441,7 @@ export async function createServer(context: AppContext, logger: Logger) {
       openimConversationId: conversationId,
       openimDisplayUserId: displayUserId,
       codexProjectPath: optionalString(body.codexProjectPath) ?? active?.codexProjectPath ?? context.config.CODEX_DEFAULT_PROJECT_PATH,
+      runtimeProfileId: optionalString(body.runtimeProfileId) ?? active?.runtimeProfileId ?? null,
       displayName: summarizeUserText(optionalString(body.displayName) ?? "New session"),
       lastSummary: summarizeUserText(optionalString(body.displayName) ?? "Manual new session", 120)
     });
@@ -428,6 +510,44 @@ export async function createServer(context: AppContext, logger: Logger) {
     return archived;
   });
 
+  app.post("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/restore", async (request, reply) => {
+    const { conversationId: rawConversationId, sessionRecordId } = request.params as {
+      conversationId: string;
+      sessionRecordId: string;
+    };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const activeJob = context.jobs.getActiveByConversationId(conversationId);
+    if (activeJob) {
+      return bridgeApiError(reply, 409, "active_job_exists", "Cannot restore a session while a runtime job is queued, running, or cancelling.", {
+        activeJob
+      });
+    }
+    const restored = context.sessions.restoreSession(conversationId, sessionRecordId);
+    if (!restored) {
+      return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
+    }
+    return restored;
+  });
+
+  app.delete("/api/conversations/:conversationId/codex-sessions/:sessionRecordId", async (request, reply) => {
+    const { conversationId: rawConversationId, sessionRecordId } = request.params as {
+      conversationId: string;
+      sessionRecordId: string;
+    };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const activeJob = context.jobs.getActiveByConversationId(conversationId);
+    if (activeJob) {
+      return bridgeApiError(reply, 409, "active_job_exists", "Cannot delete a session while a runtime job is queued, running, or cancelling.", {
+        activeJob
+      });
+    }
+    const deleted = context.sessions.deleteSession(conversationId, sessionRecordId);
+    if (!deleted) {
+      return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
+    }
+    return deleted;
+  });
+
   return app;
 }
 
@@ -446,6 +566,59 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function optionalBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    if (value === "true") return true;
+    if (value === "false") return false;
+  }
+  return undefined;
+}
+
+function parseBooleanQuery(value: string | undefined, defaultValue = false): boolean {
+  if (value === undefined) {
+    return defaultValue;
+  }
+  return value === "true" || value === "1";
+}
+
+function toRuntimeProfileInput(body: Record<string, unknown>, partial = false): RuntimeProfileInput {
+  const input: Partial<RuntimeProfileInput> = {};
+  const name = optionalString(body.name);
+  if (name || !partial) input.name = name ?? "";
+  const providerType = optionalString(body.providerType);
+  if (providerType) input.providerType = providerType as RuntimeProfileInput["providerType"];
+  const model = optionalString(body.model);
+  if (model !== null || Object.prototype.hasOwnProperty.call(body, "model")) input.model = model;
+  const sandboxMode = optionalString(body.sandboxMode);
+  if (sandboxMode !== null || Object.prototype.hasOwnProperty.call(body, "sandboxMode")) input.sandboxMode = sandboxMode;
+  const approvalPolicy = optionalString(body.approvalPolicy);
+  if (approvalPolicy !== null || Object.prototype.hasOwnProperty.call(body, "approvalPolicy")) input.approvalPolicy = approvalPolicy;
+  const codexProfile = optionalString(body.codexProfile);
+  if (codexProfile !== null || Object.prototype.hasOwnProperty.call(body, "codexProfile")) input.codexProfile = codexProfile;
+  const baseUrl = optionalString(body.baseUrl);
+  if (baseUrl !== null || Object.prototype.hasOwnProperty.call(body, "baseUrl")) input.baseUrl = baseUrl;
+  const localProvider = optionalString(body.localProvider);
+  if (localProvider) input.localProvider = localProvider as RuntimeProfileInput["localProvider"];
+  const useOss = optionalBoolean(body.useOss);
+  if (useOss !== undefined) input.useOss = useOss;
+  if (Object.prototype.hasOwnProperty.call(body, "apiKey")) {
+    input.apiKey = optionalString(body.apiKey);
+  }
+  return input as RuntimeProfileInput;
+}
+
+function redactRuntimeEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  const redacted: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (!value) continue;
+    redacted[key] = key.toLowerCase().includes("key") || key.toLowerCase().includes("token") ? "****" : value;
+  }
+  return redacted;
 }
 
 function bridgeApiError(

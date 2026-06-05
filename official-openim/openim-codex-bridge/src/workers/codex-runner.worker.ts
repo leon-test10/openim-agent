@@ -108,6 +108,20 @@ export class CodexRunnerWorker {
       userText: job.inputText
     });
     const codexHomeDir = ensureCodexRuntimeHome(session, this.context.config);
+    const runtimeProfile = session.runtimeProfileId
+      ? this.context.runtimeProfiles.getWithSecret(session.runtimeProfileId)
+      : null;
+    const runtimeOptions = {
+      model: runtimeProfile?.model ?? (this.context.config.CODEX_DEFAULT_MODEL || undefined),
+      codexHomeDir,
+      sandboxMode: runtimeProfile?.sandboxMode ?? session.sandboxMode ?? undefined,
+      approvalPolicy: runtimeProfile?.approvalPolicy ?? undefined,
+      codexProfile: runtimeProfile?.codexProfile ?? undefined,
+      baseUrl: runtimeProfile?.baseUrl ?? undefined,
+      localProvider: runtimeProfile?.localProvider ?? undefined,
+      useOss: runtimeProfile?.useOss ?? undefined,
+      apiKey: runtimeProfile?.apiKey ?? undefined
+    };
 
     try {
       const handle = session.codexSessionId
@@ -115,17 +129,13 @@ export class CodexRunnerWorker {
             projectPath: session.codexProjectPath,
             sessionId: session.codexSessionId,
             prompt,
-            model: this.context.config.CODEX_DEFAULT_MODEL || undefined,
-            codexHomeDir,
-            sandboxMode: session.sandboxMode ?? undefined,
+            ...runtimeOptions,
             onEvent: (codexEvent) => this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, codexEvent)
           })
         : this.runNewTask({
             projectPath: session.codexProjectPath,
             prompt,
-            model: this.context.config.CODEX_DEFAULT_MODEL || undefined,
-            codexHomeDir,
-            sandboxMode: session.sandboxMode ?? undefined,
+            ...runtimeOptions,
             onEvent: (codexEvent) => this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, codexEvent)
           });
 
@@ -148,9 +158,7 @@ export class CodexRunnerWorker {
         const fallbackHandle = this.runNewTask({
           projectPath: session.codexProjectPath,
           prompt,
-          model: this.context.config.CODEX_DEFAULT_MODEL || undefined,
-          codexHomeDir,
-          sandboxMode: session.sandboxMode ?? undefined,
+          ...runtimeOptions,
           onEvent: (codexEvent) => this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, codexEvent)
         });
         this.runningJobs.set(jobId, fallbackHandle);

@@ -12,6 +12,7 @@ export interface BindingSummary {
   codexHomeDir: string | null;
   codexHomeSeedMode: CodexSessionRecord["codexHomeSeedMode"];
   sandboxMode: string | null;
+  runtimeProfileId: string | null;
   sessionStatus: CodexSessionRecord["status"];
   latestJobId: string | null;
   latestJobStatus: RuntimeJob["status"] | null;

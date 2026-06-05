@@ -4,6 +4,12 @@ export interface CodexRunInput {
   model?: string;
   codexHomeDir?: string;
   sandboxMode?: string;
+  approvalPolicy?: string;
+  codexProfile?: string;
+  baseUrl?: string;
+  localProvider?: "lmstudio" | "ollama";
+  useOss?: boolean;
+  apiKey?: string;
   onEvent?: (event: Record<string, unknown>) => void;
 }
 
@@ -14,6 +20,12 @@ export interface CodexResumeInput {
   model?: string;
   codexHomeDir?: string;
   sandboxMode?: string;
+  approvalPolicy?: string;
+  codexProfile?: string;
+  baseUrl?: string;
+  localProvider?: "lmstudio" | "ollama";
+  useOss?: boolean;
+  apiKey?: string;
   onEvent?: (event: Record<string, unknown>) => void;
 }
 

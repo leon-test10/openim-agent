@@ -7,11 +7,12 @@ export interface CodexSessionRecord {
   codexHomeDir: string | null;
   codexHomeSeedMode: "copy-auth-only" | "copy-auth-and-config" | "none" | null;
   sandboxMode: string | null;
+  runtimeProfileId: string | null;
   displayName: string | null;
   displayNameSource: "auto" | "manual" | null;
   lastSummary: string | null;
   isActive: boolean;
-  status: "active" | "paused" | "archived" | "error";
+  status: "active" | "paused" | "archived" | "error" | "deleted";
   parentSessionRecordId: string | null;
   forkedFromCodexSessionId: string | null;
   createdReason: string;

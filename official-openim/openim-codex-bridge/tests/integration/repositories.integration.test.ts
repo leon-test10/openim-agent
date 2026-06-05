@@ -7,6 +7,7 @@ import { openDatabase } from "../../src/storage/db.js";
 import { SemanticEventRepository } from "../../src/core/semantic-event.repository.js";
 import { SessionBindingRepository } from "../../src/core/session-binding.repository.js";
 import { RuntimeJobRepository } from "../../src/core/runtime-job.repository.js";
+import { RuntimeProfileRepository } from "../../src/core/runtime-profile.repository.js";
 import type { SemanticEvent } from "../../src/core/semantic-event.js";
 
 const tempDirs: string[] = [];
@@ -307,6 +308,76 @@ describe("repositories", () => {
     expect(() => sessions.activateSession(semanticEvent.openimConversationId, rebound.id)).toThrow(
       `Cannot activate session record ${rebound.id}`
     );
+
+    db.close();
+  });
+
+  it("restores archived sessions and soft-deletes session records", () => {
+    const db = createTempDb();
+    const sessions = new SessionBindingRepository(db);
+
+    const original = sessions.getOrCreateActiveSession({
+      openimConversationId: semanticEvent.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    sessions.archiveSession(semanticEvent.openimConversationId, original.id);
+
+    const restored = sessions.restoreSession(semanticEvent.openimConversationId, original.id);
+    expect(restored).toMatchObject({
+      id: original.id,
+      isActive: false,
+      status: "active"
+    });
+    expect(sessions.getActiveByConversationId(semanticEvent.openimConversationId)).toBeNull();
+    expect(sessions.listByConversationId(semanticEvent.openimConversationId)).toHaveLength(1);
+
+    const deleted = sessions.deleteSession(semanticEvent.openimConversationId, original.id);
+    expect(deleted).toMatchObject({
+      id: original.id,
+      isActive: false,
+      status: "deleted"
+    });
+    expect(sessions.listByConversationId(semanticEvent.openimConversationId)).toHaveLength(0);
+    expect(sessions.listByConversationId(semanticEvent.openimConversationId, { includeDeleted: true })).toHaveLength(1);
+
+    db.close();
+  });
+
+  it("stores runtime profiles with masked encrypted API keys", () => {
+    const db = createTempDb();
+    const profiles = new RuntimeProfileRepository(db, "0123456789abcdef0123456789abcdef");
+
+    const created = profiles.create({
+      name: "OpenAI production",
+      providerType: "openai",
+      model: "codex-mini-latest",
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      codexProfile: "prod",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-test-1234567890"
+    });
+
+    expect(created).toMatchObject({
+      name: "OpenAI production",
+      providerType: "openai",
+      model: "codex-mini-latest",
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      codexProfile: "prod",
+      baseUrl: "https://api.openai.com/v1",
+      apiKeyMasked: "sk-t...7890"
+    });
+    expect(created.apiKey).toBeUndefined();
+    expect(profiles.getSecret(created.id)).toBe("sk-test-1234567890");
+
+    const updated = profiles.update(created.id, { apiKey: "sk-next-abcdef" });
+    expect(updated?.apiKeyMasked).toBe("sk-n...cdef");
+    expect(profiles.getSecret(created.id)).toBe("sk-next-abcdef");
+
+    profiles.delete(created.id);
+    expect(profiles.getById(created.id)).toBeNull();
 
     db.close();
   });

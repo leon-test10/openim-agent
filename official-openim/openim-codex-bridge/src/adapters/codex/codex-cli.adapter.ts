@@ -17,14 +17,13 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
 
   runNewTaskCancellable(input: CodexRunInput): CodexRunHandle {
     const args = ["exec", "--cd", input.projectPath, "--json"];
-    if (input.sandboxMode) {
-      args.push("--sandbox", input.sandboxMode);
-    }
-    if (input.model) {
-      args.push("--model", input.model);
-    }
+    args.push(...buildCodexRuntimeArgs(input));
     args.push("-");
-    return this.run(args, input.prompt, input.onEvent, input.codexHomeDir);
+    return this.run(args, input.prompt, input.onEvent, {
+      codexHomeDir: input.codexHomeDir,
+      apiKey: input.apiKey,
+      baseUrl: input.baseUrl
+    });
   }
 
   resumeTask(input: CodexResumeInput): Promise<CodexRunResult> {
@@ -33,24 +32,23 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
 
   resumeTaskCancellable(input: CodexResumeInput): CodexRunHandle {
     const args = ["exec", "--cd", input.projectPath, "resume", "--json"];
-    if (input.sandboxMode) {
-      args.push("--sandbox", input.sandboxMode);
-    }
-    if (input.model) {
-      args.push("--model", input.model);
-    }
+    args.push(...buildCodexRuntimeArgs(input));
     args.push(input.sessionId, "-");
-    return this.run(args, input.prompt, input.onEvent, input.codexHomeDir);
+    return this.run(args, input.prompt, input.onEvent, {
+      codexHomeDir: input.codexHomeDir,
+      apiKey: input.apiKey,
+      baseUrl: input.baseUrl
+    });
   }
 
   private run(
     args: string[],
     prompt: string,
     onEvent?: (event: Record<string, unknown>) => void,
-    codexHomeDir?: string
+    runtimeEnv?: { codexHomeDir?: string; apiKey?: string; baseUrl?: string }
   ): CodexRunHandle {
     const child = spawn(this.options.codexBin, args, {
-      env: codexHomeDir ? { ...process.env, CODEX_HOME: codexHomeDir } : process.env,
+      env: buildCodexRuntimeEnv(process.env, runtimeEnv ?? {}),
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       shell: process.platform === "win32",
@@ -138,6 +136,47 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
       cancel
     };
   }
+}
+
+export function buildCodexRuntimeArgs(input: Pick<CodexRunInput, "model" | "sandboxMode" | "approvalPolicy" | "codexProfile" | "useOss" | "localProvider">): string[] {
+  const args: string[] = [];
+  if (input.sandboxMode) {
+    args.push("--sandbox", input.sandboxMode);
+  }
+  if (input.model) {
+    args.push("--model", input.model);
+  }
+  if (input.approvalPolicy) {
+    args.push("--ask-for-approval", input.approvalPolicy);
+  }
+  if (input.codexProfile) {
+    args.push("--profile", input.codexProfile);
+  }
+  if (input.useOss) {
+    args.push("--oss");
+  }
+  if (input.localProvider) {
+    args.push("--local-provider", input.localProvider);
+  }
+  return args;
+}
+
+export function buildCodexRuntimeEnv(
+  baseEnv: NodeJS.ProcessEnv,
+  input: { codexHomeDir?: string; apiKey?: string; baseUrl?: string }
+): NodeJS.ProcessEnv {
+  const env = { ...baseEnv };
+  if (input.codexHomeDir) {
+    env.CODEX_HOME = input.codexHomeDir;
+  }
+  if (input.apiKey) {
+    env.OPENAI_API_KEY = input.apiKey;
+  }
+  if (input.baseUrl) {
+    env.OPENAI_BASE_URL = input.baseUrl;
+    env.OPENAI_API_BASE_URL = input.baseUrl;
+  }
+  return env;
 }
 
 function killProcessTree(pid: number | undefined): Promise<void> {

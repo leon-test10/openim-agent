@@ -9,6 +9,7 @@ import { SemanticEventRepository } from "../../src/core/semantic-event.repositor
 import { SessionBindingRepository } from "../../src/core/session-binding.repository.js";
 import { RuntimeJobRepository } from "../../src/core/runtime-job.repository.js";
 import { RuntimeEventRepository } from "../../src/core/runtime-event.repository.js";
+import { RuntimeProfileRepository } from "../../src/core/runtime-profile.repository.js";
 import { createServer } from "../../src/server.js";
 import type { AppContext } from "../../src/app-context.js";
 import type { SemanticEvent } from "../../src/core/semantic-event.js";
@@ -42,6 +43,7 @@ function createTempContext(overrides: Partial<Pick<AppContext, "codex" | "openim
     CODEX_SESSION_HOME_SEED_MODE: "copy-auth-only" as const,
     CODEX_BASE_HOME: "",
     CODEX_SANDBOX_MODE: "",
+    BRIDGE_SECRET_KEY: "0123456789abcdef0123456789abcdef",
     DATABASE_URL: `file:${join(dir, "bridge.sqlite")}`,
     LOG_LEVEL: "silent"
   };
@@ -57,6 +59,7 @@ function createTempContext(overrides: Partial<Pick<AppContext, "codex" | "openim
     }),
     jobs: new RuntimeJobRepository(db),
     runtimeEvents: new RuntimeEventRepository(db),
+    runtimeProfiles: new RuntimeProfileRepository(db, config.BRIDGE_SECRET_KEY),
     codex: overrides.codex ?? {
       runNewTask: async () => ({ ok: true, outputText: "ok", rawOutput: "" }),
       resumeTask: async () => ({ ok: true, outputText: "ok", rawOutput: "" })
@@ -428,6 +431,113 @@ describe("status API", () => {
         })
       ])
     );
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("restores and soft-deletes session records through the sessions API", async () => {
+    const context = createTempContext();
+    const session = context.sessions.getOrCreateActiveSession({
+      openimConversationId: event.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo",
+      displayName: "Restorable"
+    });
+    context.sessions.archiveSession(event.openimConversationId, session.id);
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const restored = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions/${session.id}/restore`
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toMatchObject({ id: session.id, status: "active", isActive: false });
+
+    const removed = await app.inject({
+      method: "DELETE",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions/${session.id}`
+    });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toMatchObject({ id: session.id, status: "deleted", isActive: false });
+
+    const visible = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions`
+    });
+    expect(visible.json().sessions).toHaveLength(0);
+
+    const withDeleted = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions?includeDeleted=true`
+    });
+    expect(withDeleted.json().sessions).toEqual([
+      expect.objectContaining({ id: session.id, status: "deleted" })
+    ]);
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("creates, masks, updates, tests, and deletes runtime profiles", async () => {
+    const context = createTempContext();
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/runtime-profiles",
+      payload: {
+        name: "OpenAI compatible",
+        providerType: "openai-compatible",
+        model: "codex-mini-latest",
+        sandboxMode: "workspace-write",
+        approvalPolicy: "never",
+        codexProfile: "dev",
+        baseUrl: "https://example.test/v1",
+        apiKey: "sk-live-123456"
+      }
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({
+      name: "OpenAI compatible",
+      providerType: "openai-compatible",
+      model: "codex-mini-latest",
+      apiKeyMasked: "sk-l...3456"
+    });
+    expect(created.json().apiKey).toBeUndefined();
+
+    const list = await app.inject({ method: "GET", url: "/api/runtime-profiles" });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().profiles).toEqual([
+      expect.objectContaining({ id: created.json().id, apiKeyMasked: "sk-l...3456" })
+    ]);
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: `/api/runtime-profiles/${created.json().id}`,
+      payload: { name: "Renamed profile", model: "gpt-5" }
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({ name: "Renamed profile", model: "gpt-5" });
+
+    const test = await app.inject({
+      method: "POST",
+      url: `/api/runtime-profiles/${created.json().id}/test`
+    });
+    expect(test.statusCode).toBe(200);
+    expect(test.json()).toMatchObject({
+      ok: true,
+      profile: { id: created.json().id, apiKeyMasked: "sk-l...3456" },
+      codexArgs: expect.arrayContaining(["--model", "gpt-5", "--profile", "dev"])
+    });
+    expect(test.json().env.OPENAI_API_KEY).toBe("****");
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/api/runtime-profiles/${created.json().id}`
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toMatchObject({ status: "deleted" });
 
     await app.close();
     context.db.close();

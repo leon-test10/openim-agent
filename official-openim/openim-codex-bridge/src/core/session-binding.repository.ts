@@ -13,11 +13,12 @@ interface SessionRow {
   codex_home_dir: string | null;
   codex_home_seed_mode: CodexSessionRecord["codexHomeSeedMode"];
   sandbox_mode: string | null;
+  runtime_profile_id: string | null;
   display_name: string | null;
   display_name_source: CodexSessionRecord["displayNameSource"];
   last_summary: string | null;
   is_active: number;
-  status: "active" | "paused" | "archived" | "error";
+  status: "active" | "paused" | "archived" | "error" | "deleted";
   parent_session_record_id: string | null;
   forked_from_codex_session_id: string | null;
   created_reason: string;
@@ -31,6 +32,7 @@ export interface GetOrCreateActiveSessionInput {
   codexProjectPath: string;
   displayName?: string | null;
   lastSummary?: string | null;
+  runtimeProfileId?: string | null;
 }
 
 export interface RebindConversationInput extends GetOrCreateActiveSessionInput {
@@ -83,13 +85,13 @@ export class SessionBindingRepository {
           `
           INSERT INTO codex_session_records (
             id, openim_conversation_id, openim_display_user_id, codex_session_id,
-            codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode,
+            codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode, runtime_profile_id,
             display_name, display_name_source, last_summary,
             is_active, status, parent_session_record_id,
             forked_from_codex_session_id, created_reason, created_at, updated_at
           ) VALUES (
             @id, @openimConversationId, @openimDisplayUserId, NULL,
-            @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode,
+            @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode, @runtimeProfileId,
             @displayName, @displayNameSource, @lastSummary,
             1, 'active', NULL,
             NULL, 'auto_created_from_openim_message', @createdAt, @updatedAt
@@ -101,6 +103,7 @@ export class SessionBindingRepository {
           openimConversationId: input.openimConversationId,
           openimDisplayUserId: input.openimDisplayUserId,
           codexProjectPath: input.codexProjectPath,
+          runtimeProfileId: normalizeBlank(input.runtimeProfileId ?? undefined),
           displayName: normalizeBlank(input.displayName ?? undefined),
           displayNameSource: normalizeBlank(input.displayName ?? undefined) ? "auto" : null,
           lastSummary: normalizeBlank(input.lastSummary ?? undefined),
@@ -123,7 +126,7 @@ export class SessionBindingRepository {
       .prepare(
         `
         SELECT * FROM codex_session_records
-        WHERE openim_conversation_id = ? AND is_active = 1
+        WHERE openim_conversation_id = ? AND is_active = 1 AND status != 'deleted'
       `
       )
       .get(openimConversationId) as SessionRow | undefined;
@@ -135,7 +138,7 @@ export class SessionBindingRepository {
       .prepare(
         `
         SELECT * FROM codex_session_records
-        WHERE is_active = 1
+        WHERE is_active = 1 AND status != 'deleted'
         ORDER BY updated_at DESC
       `
       )
@@ -150,17 +153,23 @@ export class SessionBindingRepository {
       codexHomeDir: row.codex_home_dir,
       codexHomeSeedMode: row.codex_home_seed_mode,
       sandboxMode: row.sandbox_mode,
+      runtimeProfileId: row.runtime_profile_id,
       sessionStatus: row.status,
       updatedAt: row.updated_at
     }));
   }
 
-  listByConversationId(openimConversationId: string): CodexSessionRecord[] {
+  listByConversationId(
+    openimConversationId: string,
+    options: { includeArchived?: boolean; includeDeleted?: boolean } = {}
+  ): CodexSessionRecord[] {
     const rows = this.db
       .prepare(
         `
         SELECT * FROM codex_session_records
         WHERE openim_conversation_id = ?
+          ${options.includeArchived === false ? "AND status != 'archived'" : ""}
+          ${options.includeDeleted ? "" : "AND status != 'deleted'"}
         ORDER BY is_active DESC, updated_at DESC
       `
       )
@@ -168,10 +177,13 @@ export class SessionBindingRepository {
     return rows.map(mapSessionRow);
   }
 
-  getById(id: string): CodexSessionRecord | null {
+  getById(id: string, options: { includeDeleted?: boolean } = {}): CodexSessionRecord | null {
     const row = this.db.prepare("SELECT * FROM codex_session_records WHERE id = ?").get(id) as
       | SessionRow
       | undefined;
+    if (row?.status === "deleted" && !options.includeDeleted) {
+      return null;
+    }
     return row ? mapSessionRow(row) : null;
   }
 
@@ -184,13 +196,13 @@ export class SessionBindingRepository {
         `
         INSERT INTO codex_session_records (
           id, openim_conversation_id, openim_display_user_id, codex_session_id,
-          codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode,
+          codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode, runtime_profile_id,
           display_name, display_name_source, last_summary,
           is_active, status, parent_session_record_id,
           forked_from_codex_session_id, created_reason, created_at, updated_at
         ) VALUES (
           @id, @openimConversationId, @openimDisplayUserId, NULL,
-          @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode,
+          @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode, @runtimeProfileId,
           @displayName, @displayNameSource, @lastSummary,
           0, 'active', NULL,
           NULL, 'manual_new_session', @createdAt, @updatedAt
@@ -202,6 +214,7 @@ export class SessionBindingRepository {
         openimConversationId: input.openimConversationId,
         openimDisplayUserId: input.openimDisplayUserId,
         codexProjectPath: input.codexProjectPath,
+        runtimeProfileId: normalizeBlank(input.runtimeProfileId ?? undefined),
         displayName: normalizeBlank(input.displayName ?? undefined),
         displayNameSource: normalizeBlank(input.displayName ?? undefined) ? "auto" : null,
         lastSummary: normalizeBlank(input.lastSummary ?? undefined),
@@ -233,13 +246,13 @@ export class SessionBindingRepository {
           `
           INSERT INTO codex_session_records (
             id, openim_conversation_id, openim_display_user_id, codex_session_id,
-            codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode,
+            codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode, runtime_profile_id,
             display_name, display_name_source, last_summary,
             is_active, status, parent_session_record_id,
             forked_from_codex_session_id, created_reason, created_at, updated_at
           ) VALUES (
             @id, @openimConversationId, @openimDisplayUserId, @codexSessionId,
-            @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode,
+            @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode, @runtimeProfileId,
             @displayName, @displayNameSource, @lastSummary,
             1, 'active', @parentSessionRecordId,
             @forkedFromCodexSessionId, 'manual_rebind', @createdAt, @updatedAt
@@ -252,6 +265,7 @@ export class SessionBindingRepository {
           openimDisplayUserId: input.openimDisplayUserId,
           codexSessionId: input.codexSessionId ?? null,
           codexProjectPath: input.codexProjectPath,
+          runtimeProfileId: normalizeBlank(input.runtimeProfileId ?? undefined),
           displayName: normalizeBlank(input.displayName ?? undefined),
           displayNameSource: normalizeBlank(input.displayName ?? undefined) ? "auto" : null,
           lastSummary: normalizeBlank(input.lastSummary ?? undefined),
@@ -302,9 +316,45 @@ export class SessionBindingRepository {
     return this.getById(sessionRecordId);
   }
 
+  restoreSession(openimConversationId: string, sessionRecordId: string): CodexSessionRecord | null {
+    const target = this.getById(sessionRecordId, { includeDeleted: true });
+    if (!target || target.openimConversationId !== openimConversationId || target.status === "deleted") {
+      return null;
+    }
+    const now = Date.now();
+    this.db
+      .prepare(
+        `
+        UPDATE codex_session_records
+        SET is_active = 0, status = 'active', updated_at = ?
+        WHERE id = ?
+      `
+      )
+      .run(now, sessionRecordId);
+    return this.getById(sessionRecordId);
+  }
+
+  deleteSession(openimConversationId: string, sessionRecordId: string): CodexSessionRecord | null {
+    const target = this.getById(sessionRecordId, { includeDeleted: true });
+    if (!target || target.openimConversationId !== openimConversationId) {
+      return null;
+    }
+    const now = Date.now();
+    this.db
+      .prepare(
+        `
+        UPDATE codex_session_records
+        SET is_active = 0, status = 'deleted', updated_at = ?
+        WHERE id = ?
+      `
+      )
+      .run(now, sessionRecordId);
+    return this.getById(sessionRecordId, { includeDeleted: true });
+  }
+
   activateSession(openimConversationId: string, sessionRecordId: string): CodexSessionRecord {
     const target = this.getById(sessionRecordId);
-    if (!target || target.openimConversationId !== openimConversationId || target.status === "archived") {
+    if (!target || target.openimConversationId !== openimConversationId || target.status === "archived" || target.status === "deleted") {
       throw new Error(`Cannot activate session record ${sessionRecordId}`);
     }
     const now = Date.now();
@@ -323,7 +373,7 @@ export class SessionBindingRepository {
           `
           UPDATE codex_session_records
           SET is_active = 1, updated_at = ?
-          WHERE openim_conversation_id = ? AND id = ? AND status != 'archived'
+          WHERE openim_conversation_id = ? AND id = ? AND status NOT IN ('archived', 'deleted')
         `
         )
         .run(now, openimConversationId, sessionRecordId);
@@ -468,6 +518,7 @@ function mapSessionRow(row: SessionRow): CodexSessionRecord {
     codexHomeDir: row.codex_home_dir,
     codexHomeSeedMode: row.codex_home_seed_mode,
     sandboxMode: row.sandbox_mode,
+    runtimeProfileId: row.runtime_profile_id,
     displayName: row.display_name,
     displayNameSource: row.display_name_source,
     lastSummary: row.last_summary,

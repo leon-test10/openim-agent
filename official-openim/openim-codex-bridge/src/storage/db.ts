@@ -56,6 +56,7 @@ function migrate(db: BridgeDatabase): void {
       codex_home_dir TEXT,
       codex_home_seed_mode TEXT,
       sandbox_mode TEXT,
+      runtime_profile_id TEXT,
       display_name TEXT,
       display_name_source TEXT,
       last_summary TEXT,
@@ -74,6 +75,29 @@ function migrate(db: BridgeDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_codex_session_records_conversation
       ON codex_session_records(openim_conversation_id);
+
+    CREATE TABLE IF NOT EXISTS codex_runtime_profiles (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      provider_type TEXT NOT NULL,
+      model TEXT,
+      sandbox_mode TEXT,
+      approval_policy TEXT,
+      codex_profile TEXT,
+      base_url TEXT,
+      local_provider TEXT,
+      use_oss INTEGER NOT NULL DEFAULT 0,
+      api_key_encrypted TEXT,
+      api_key_iv TEXT,
+      api_key_tag TEXT,
+      api_key_masked TEXT,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_codex_runtime_profiles_updated
+      ON codex_runtime_profiles(updated_at);
 
     CREATE TABLE IF NOT EXISTS runtime_jobs (
       id TEXT PRIMARY KEY,
@@ -126,6 +150,7 @@ function migrate(db: BridgeDatabase): void {
   ensureColumn(db, "codex_session_records", "codex_home_dir", "TEXT");
   ensureColumn(db, "codex_session_records", "codex_home_seed_mode", "TEXT");
   ensureColumn(db, "codex_session_records", "sandbox_mode", "TEXT");
+  ensureColumn(db, "codex_session_records", "runtime_profile_id", "TEXT");
   ensureColumn(db, "codex_session_records", "display_name", "TEXT");
   ensureColumn(db, "codex_session_records", "display_name_source", "TEXT");
   ensureColumn(db, "codex_session_records", "last_summary", "TEXT");
