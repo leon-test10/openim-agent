@@ -105,42 +105,84 @@ export class CodexRunnerWorker {
       openimConversationId: job.openimConversationId,
       codexProjectPath: session.codexProjectPath,
       codexSessionId: session.codexSessionId,
-      userText: job.inputText
+      userText: job.inputText,
+      openimHistoryMessages: this.context.openimHistory.getLatestSnapshot(job.openimConversationId)?.messages
     });
     const codexHomeDir = ensureCodexRuntimeHome(session, this.context.config);
     const runtimeProfile = session.runtimeProfileId
       ? this.context.runtimeProfiles.getWithSecret(session.runtimeProfileId)
       : null;
+    const providerId = runtimeProfile ? sanitizeProviderId(runtimeProfile.id) : undefined;
+    const providerBaseUrl = runtimeProfile?.providerMode === "deepseek-via-responses-bridge"
+      ? runtimeProfile.bridgeBaseUrl
+      : runtimeProfile?.providerMode === "openai-responses"
+        ? runtimeProfile.baseUrl
+        : null;
+    const apiKeyEnvName = runtimeProfile?.authEnvKey ?? (providerId ? `CODEX_RUNTIME_PROFILE_${providerId.toUpperCase()}_API_KEY` : undefined);
     const runtimeOptions = {
       model: runtimeProfile?.model ?? (this.context.config.CODEX_DEFAULT_MODEL || undefined),
-      codexHomeDir,
+      codexHomeDir: runtimeProfile?.codexHomeOverride ?? codexHomeDir,
       sandboxMode: runtimeProfile?.sandboxMode ?? session.sandboxMode ?? undefined,
       approvalPolicy: runtimeProfile?.approvalPolicy ?? undefined,
       codexProfile: runtimeProfile?.codexProfile ?? undefined,
       baseUrl: runtimeProfile?.baseUrl ?? undefined,
+      modelProviderId: providerBaseUrl ? providerId : undefined,
+      modelProviderBaseUrl: providerBaseUrl ?? undefined,
+      modelProviderWireApi: runtimeProfile?.wireApi ?? "responses",
+      apiKeyEnvName,
       localProvider: runtimeProfile?.localProvider ?? undefined,
       useOss: runtimeProfile?.useOss ?? undefined,
       apiKey: runtimeProfile?.apiKey ?? undefined
     };
 
     try {
+      const workerStartedAt = Date.now();
+      this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, {
+        type: "bridge.webhook_received",
+        createdAt: job.createdAt
+      });
+      this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, {
+        type: "bridge.worker_started",
+        queuedMs: workerStartedAt - job.createdAt,
+        createdAt: workerStartedAt
+      });
+      let firstCodexEventSeen = false;
+      const recordCodexEvent = (codexEvent: Record<string, unknown>) => {
+        if (!firstCodexEventSeen) {
+          firstCodexEventSeen = true;
+          this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, {
+            type: "codex.first_event",
+            sinceWorkerStartedMs: Date.now() - workerStartedAt
+          });
+        }
+        this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, codexEvent);
+      };
+
       const handle = session.codexSessionId
-        ? this.resumeTask({
+        ? (this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, {
+            type: "codex.resume.started",
+            sessionId: session.codexSessionId
+          }),
+          this.resumeTask({
             projectPath: session.codexProjectPath,
             sessionId: session.codexSessionId,
             prompt,
             ...runtimeOptions,
-            onEvent: (codexEvent) => this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, codexEvent)
-          })
+            onEvent: recordCodexEvent
+          }))
         : this.runNewTask({
             projectPath: session.codexProjectPath,
             prompt,
             ...runtimeOptions,
-            onEvent: (codexEvent) => this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, codexEvent)
+            onEvent: recordCodexEvent
           });
 
       this.runningJobs.set(jobId, handle);
       this.context.jobs.markRunning(jobId);
+      this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, {
+        type: "codex.process_spawned",
+        pid: handle.pid
+      });
       const startedJob = this.context.jobs.getById(jobId);
       if (startedJob?.status === "cancelled") {
         await handle.cancel("api");
@@ -148,9 +190,28 @@ export class CodexRunnerWorker {
         return;
       }
       let result = await handle.promise;
+      this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, {
+        type: "codex.process_completed",
+        ok: result.ok,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        cancelled: result.cancelled,
+        sinceWorkerStartedMs: Date.now() - workerStartedAt
+      });
       this.runningJobs.delete(jobId);
+      if (session.codexSessionId && result.ok) {
+        this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, {
+          type: "codex.resume.succeeded",
+          sessionId: session.codexSessionId
+        });
+      }
 
       if (!result.ok && session.codexSessionId && isMissingCodexRolloutError(result.errorText)) {
+        this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, {
+          type: "codex.resume.failed",
+          sessionId: session.codexSessionId,
+          error: result.errorText
+        });
         this.logger.warn(
           { jobId, sessionRecordId: session.id, codexSessionId: session.codexSessionId, codexHomeDir },
           "Codex resume failed because the isolated home does not contain the old rollout; starting a new task"
@@ -159,10 +220,22 @@ export class CodexRunnerWorker {
           projectPath: session.codexProjectPath,
           prompt,
           ...runtimeOptions,
-          onEvent: (codexEvent) => this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, codexEvent)
+          onEvent: recordCodexEvent
         });
         this.runningJobs.set(jobId, fallbackHandle);
+        this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, {
+          type: "codex.resume.fallback_new_task",
+          previousSessionId: session.codexSessionId
+        });
         result = await fallbackHandle.promise;
+        this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, {
+          type: "codex.fallback_process_completed",
+          ok: result.ok,
+          exitCode: result.exitCode,
+          timedOut: result.timedOut,
+          cancelled: result.cancelled,
+          sinceWorkerStartedMs: Date.now() - workerStartedAt
+        });
         this.runningJobs.delete(jobId);
       }
 
@@ -236,19 +309,34 @@ export class CodexRunnerWorker {
     }
   }
 
-  private reply(
+  private async reply(
     event: SemanticEvent,
     jobId: string,
     sessionRecordId: string,
     codexSessionId: string | null,
     text: string
   ): Promise<void> {
-    return this.context.openimSender.sendBotText({
-      operationId: jobId,
-      recvId: event.senderUserId,
-      text,
-      metadata: { jobId, sessionRecordId, codexSessionId }
+    this.recordRuntimeEvent(jobId, sessionRecordId, event.openimConversationId, {
+      type: "openim.reply_started",
+      textLength: text.length
     });
+    try {
+      await this.context.openimSender.sendBotText({
+        operationId: jobId,
+        recvId: event.senderUserId,
+        text,
+        metadata: { jobId, sessionRecordId, codexSessionId }
+      });
+      this.recordRuntimeEvent(jobId, sessionRecordId, event.openimConversationId, {
+        type: "openim.reply_completed"
+      });
+    } catch (error) {
+      this.recordRuntimeEvent(jobId, sessionRecordId, event.openimConversationId, {
+        type: "openim.reply_failed",
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
   }
 
   private recordRuntimeEvent(
@@ -258,6 +346,7 @@ export class CodexRunnerWorker {
     codexEvent: Record<string, unknown>
   ): void {
     const normalized = normalizeCodexJsonEvent(codexEvent);
+    const createdAt = typeof codexEvent.createdAt === "number" ? codexEvent.createdAt : undefined;
     this.context.runtimeEvents.recordCodexJsonEvent({
       jobId,
       sessionRecordId,
@@ -265,7 +354,8 @@ export class CodexRunnerWorker {
       eventType: normalized.eventType,
       title: normalized.title,
       summary: normalized.summary,
-      rawEvent: normalized.rawEvent
+      rawEvent: normalized.rawEvent,
+      createdAt
     });
   }
 
@@ -294,4 +384,8 @@ export class CodexRunnerWorker {
 
 function isMissingCodexRolloutError(errorText: string | undefined): boolean {
   return Boolean(errorText?.includes("no rollout found for thread id"));
+}
+
+function sanitizeProviderId(value: string): string {
+  return value.replace(/[^A-Za-z0-9_]/g, "_");
 }

@@ -1,6 +1,11 @@
 import sensible from "@fastify/sensible";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { existsSync, readdirSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
 import type { Logger } from "pino";
 import type { AppContext } from "./app-context.js";
 import { shouldCreateRuntimeJob } from "./core/agent-decision.service.js";
@@ -13,7 +18,7 @@ import type { RuntimeProfileInput } from "./core/runtime-profile.js";
 const BRIDGE_META = {
   name: "openim-codex-bridge",
   version: "0.1.0",
-  apiVersion: "2026-06-05.phase3g",
+  apiVersion: "2026-06-06.phase3i",
   capabilities: {
     sessionMetadata: true,
     sessionActivate: true,
@@ -24,7 +29,9 @@ const BRIDGE_META = {
     runtimeEvents: true,
     jobCancel: true,
     jobRetry: true,
-    runtimeProfiles: true
+    runtimeProfiles: true,
+    sessionResumeDiagnostics: true,
+    openimHistoryImport: true
   }
 } as const;
 
@@ -89,26 +96,33 @@ export async function createServer(context: AppContext, logger: Logger) {
     if (!profile) {
       return bridgeApiError(reply, 404, "runtime_profile_not_found", "Runtime profile not found.");
     }
-    const codexArgs = buildCodexRuntimeArgs({
-      model: profile.model ?? undefined,
-      sandboxMode: profile.sandboxMode ?? undefined,
-      approvalPolicy: profile.approvalPolicy ?? undefined,
-      codexProfile: profile.codexProfile ?? undefined,
-      useOss: profile.useOss,
-      localProvider: profile.localProvider ?? undefined
+    const body = isRecord(request.body) ? request.body : {};
+    const shouldRunUpstreamProbe = optionalBoolean(body.upstreamProbe) ?? true;
+    const shouldRunCodexProbe = optionalBoolean(body.codexProbe) ?? true;
+    const probeRuntime = buildRuntimeProfileProbeInput(profile);
+    const codexArgs = buildCodexRuntimeArgs(probeRuntime);
+    const env = buildCodexRuntimeEnv({}, {
+      apiKey: profile.apiKey ?? undefined,
+      apiKeyEnvName: probeRuntime.apiKeyEnvName,
+      baseUrl: profile.baseUrl ?? undefined
     });
-    const env = buildCodexRuntimeEnv(
-      {},
-      {
-        apiKey: profile.apiKey ?? undefined,
-        baseUrl: profile.baseUrl ?? undefined
-      }
-    );
+    const upstreamProbe = shouldRunUpstreamProbe
+      ? await runUpstreamProbe(profile)
+      : { ok: false, skipped: true, errorText: "upstream probe disabled" };
+    const codexProbe = shouldRunCodexProbe
+      ? await runCodexProbe({
+          codexBin: context.config.CODEX_BIN,
+          args: codexArgs,
+          env,
+          codexHomeDir: profile.codexHomeOverride ?? undefined,
+          timeoutMs: Math.min(context.config.CODEX_EXEC_TIMEOUT_MS, 120000)
+        })
+      : { ok: true, skipped: true, codexArgs, env: redactRuntimeEnv(env) };
     return {
-      ok: true,
+      ok: upstreamProbe.ok || codexProbe.ok,
       profile: context.runtimeProfiles.getById(profileId),
-      codexArgs,
-      env: redactRuntimeEnv(env)
+      upstreamProbe,
+      codexProbe
     };
   });
 
@@ -136,6 +150,28 @@ export async function createServer(context: AppContext, logger: Logger) {
     const decision = shouldCreateRuntimeJob(event, { botUserId: context.config.OPENIM_BOT_USER_ID });
     if (!decision.shouldRun) {
       return openImCallbackOk({ ignored: true, reason: decision.reason });
+    }
+
+    const historyCommand = parseHistoryImportCommand(event.text);
+    if (historyCommand) {
+      const importRequest = context.openimHistory.createImportRequest({
+        openimConversationId: event.openimConversationId,
+        requestedCount: historyCommand.requestedCount
+      });
+      await context.openimSender.sendBotText({
+        operationId: importRequest.id,
+        recvId: event.senderUserId,
+        text: `OpenIM history import requested (${historyCommand.requestedCount} messages). Keep this Electron client open so it can upload the local conversation history snapshot.`,
+        metadata: { jobId: importRequest.id, sessionRecordId: "history_import", codexSessionId: null }
+      }).catch((error: unknown) => {
+        logger.warn({ err: error, importRequestId: importRequest.id }, "failed to send history import acknowledgement");
+      });
+      return openImCallbackOk({
+        ignored: false,
+        command: "load_history",
+        requestedCount: historyCommand.requestedCount,
+        importRequestId: importRequest.id
+      });
     }
 
     const session = context.sessions.getOrCreateActiveSession({
@@ -181,6 +217,28 @@ export async function createServer(context: AppContext, logger: Logger) {
     const decision = shouldCreateRuntimeJob(event, { botUserId: context.config.OPENIM_BOT_USER_ID });
     if (!decision.shouldRun) {
       return openImCallbackOk({ ignored: true, reason: decision.reason });
+    }
+
+    const historyCommand = parseHistoryImportCommand(event.text);
+    if (historyCommand) {
+      const importRequest = context.openimHistory.createImportRequest({
+        openimConversationId: event.openimConversationId,
+        requestedCount: historyCommand.requestedCount
+      });
+      await context.openimSender.sendBotText({
+        operationId: importRequest.id,
+        recvId: event.senderUserId,
+        text: `OpenIM history import requested (${historyCommand.requestedCount} messages). Keep this Electron client open so it can upload the local conversation history snapshot.`,
+        metadata: { jobId: importRequest.id, sessionRecordId: "history_import", codexSessionId: null }
+      }).catch((error: unknown) => {
+        logger.warn({ err: error, importRequestId: importRequest.id }, "failed to send history import acknowledgement");
+      });
+      return openImCallbackOk({
+        ignored: false,
+        command: "load_history",
+        requestedCount: historyCommand.requestedCount,
+        importRequestId: importRequest.id
+      });
     }
 
     const session = context.sessions.getOrCreateActiveSession({
@@ -409,7 +467,8 @@ export async function createServer(context: AppContext, logger: Logger) {
       activeJob: toRuntimeJobView(activeJob),
       latestJob: toRuntimeJobView(latestJob),
       recentJobs: recentJobs.map((job) => toRuntimeJobView(job)),
-      queuedJobCount: context.jobs.countQueuedByConversationId(conversationId)
+      queuedJobCount: context.jobs.countQueuedByConversationId(conversationId),
+      pendingHistoryImport: context.openimHistory.getPendingByConversationId(conversationId)
     };
   });
 
@@ -424,6 +483,52 @@ export async function createServer(context: AppContext, logger: Logger) {
         includeDeleted: parseBooleanQuery(query.includeDeleted)
       })
     };
+  });
+
+  app.get("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/diagnostics", async (request, reply) => {
+    const { conversationId: rawConversationId, sessionRecordId } = request.params as {
+      conversationId: string;
+      sessionRecordId: string;
+    };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const session = context.sessions.getById(sessionRecordId);
+    if (!session || session.openimConversationId !== conversationId) {
+      return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
+    }
+    const latestJob = context.jobs.listRecentByConversationId(conversationId, 50).find((job) => job.sessionRecordId === session.id) ?? null;
+    const homeExists = Boolean(session.codexHomeDir && existsSync(session.codexHomeDir));
+    const rolloutExists = Boolean(session.codexSessionId && session.codexHomeDir && hasRolloutFile(session.codexHomeDir, session.codexSessionId));
+    const lastResumeFailure = latestJob && latestJob.codexSessionIdBefore && latestJob.codexSessionIdAfter && latestJob.codexSessionIdBefore !== latestJob.codexSessionIdAfter
+      ? "fallback_new_task"
+      : null;
+    return {
+      conversationId,
+      sessionRecordId: session.id,
+      codexSessionId: session.codexSessionId,
+      codexHomeDir: session.codexHomeDir,
+      homeExists,
+      rolloutExists,
+      resumeReady: Boolean(session.codexSessionId && homeExists && rolloutExists),
+      lastJobId: latestJob?.id ?? null,
+      lastResumeFailure
+    };
+  });
+
+  app.post("/api/conversations/:conversationId/openim-history-snapshots", async (request, reply) => {
+    const { conversationId: rawConversationId } = request.params as { conversationId: string };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const body = isRecord(request.body) ? request.body : {};
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    if (!messages.length) {
+      return bridgeApiError(reply, 400, "history_messages_required", "messages is required.");
+    }
+    const snapshot = context.openimHistory.createSnapshot({
+      requestId: optionalString(body.requestId),
+      openimConversationId: conversationId,
+      source: optionalString(body.source) ?? "electron-sdk",
+      messages: messages.map(toHistoryMessage)
+    });
+    return reply.code(201).send(snapshot);
   });
 
   app.post("/api/conversations/:conversationId/codex-sessions", async (request, reply) => {
@@ -579,6 +684,62 @@ function optionalBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
+function parseHistoryImportCommand(text: string | null | undefined): { requestedCount: number } | null {
+  const normalized = text?.trim();
+  if (!normalized) {
+    return null;
+  }
+  const match = normalized.match(/^(?:\/load_history|\/history\s+import|加载历史)(?:\s+(\d+))?$/i);
+  if (!match) {
+    return null;
+  }
+  const requested = Number(match[1] ?? 50);
+  const requestedCount = Math.max(1, Math.min(Number.isFinite(requested) ? requested : 50, 200));
+  return { requestedCount };
+}
+
+function toHistoryMessage(value: unknown) {
+  const row = isRecord(value) ? value : {};
+  return {
+    clientMsgID: optionalString(row.clientMsgID) ?? undefined,
+    serverMsgID: optionalString(row.serverMsgID) ?? undefined,
+    sendID: optionalString(row.sendID) ?? undefined,
+    senderNickname: optionalString(row.senderNickname) ?? undefined,
+    contentType: typeof row.contentType === "number" ? row.contentType : undefined,
+    sendTime: typeof row.sendTime === "number" ? row.sendTime : undefined,
+    text: optionalString(row.text) ?? undefined,
+    preview: optionalString(row.preview) ?? undefined
+  };
+}
+
+function hasRolloutFile(codexHomeDir: string, codexSessionId: string): boolean {
+  for (const root of [join(codexHomeDir, "sessions"), join(codexHomeDir, "archived_sessions")]) {
+    if (findFileNameContaining(root, codexSessionId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function findFileNameContaining(root: string, needle: string): boolean {
+  if (!existsSync(root)) {
+    return false;
+  }
+  const stack = [root];
+  while (stack.length) {
+    const current = stack.pop()!;
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const fullPath = join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+      } else if (entry.name.includes(needle)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function parseBooleanQuery(value: string | undefined, defaultValue = false): boolean {
   if (value === undefined) {
     return defaultValue;
@@ -592,6 +753,8 @@ function toRuntimeProfileInput(body: Record<string, unknown>, partial = false): 
   if (name || !partial) input.name = name ?? "";
   const providerType = optionalString(body.providerType);
   if (providerType) input.providerType = providerType as RuntimeProfileInput["providerType"];
+  const providerMode = optionalString(body.providerMode);
+  if (providerMode !== null || Object.prototype.hasOwnProperty.call(body, "providerMode")) input.providerMode = providerMode as RuntimeProfileInput["providerMode"];
   const model = optionalString(body.model);
   if (model !== null || Object.prototype.hasOwnProperty.call(body, "model")) input.model = model;
   const sandboxMode = optionalString(body.sandboxMode);
@@ -602,6 +765,14 @@ function toRuntimeProfileInput(body: Record<string, unknown>, partial = false): 
   if (codexProfile !== null || Object.prototype.hasOwnProperty.call(body, "codexProfile")) input.codexProfile = codexProfile;
   const baseUrl = optionalString(body.baseUrl);
   if (baseUrl !== null || Object.prototype.hasOwnProperty.call(body, "baseUrl")) input.baseUrl = baseUrl;
+  const bridgeBaseUrl = optionalString(body.bridgeBaseUrl);
+  if (bridgeBaseUrl !== null || Object.prototype.hasOwnProperty.call(body, "bridgeBaseUrl")) input.bridgeBaseUrl = bridgeBaseUrl;
+  const wireApi = optionalString(body.wireApi);
+  if (wireApi !== null || Object.prototype.hasOwnProperty.call(body, "wireApi")) input.wireApi = wireApi;
+  const authEnvKey = optionalString(body.authEnvKey);
+  if (authEnvKey !== null || Object.prototype.hasOwnProperty.call(body, "authEnvKey")) input.authEnvKey = authEnvKey;
+  const codexHomeOverride = optionalString(body.codexHomeOverride);
+  if (codexHomeOverride !== null || Object.prototype.hasOwnProperty.call(body, "codexHomeOverride")) input.codexHomeOverride = codexHomeOverride;
   const localProvider = optionalString(body.localProvider);
   if (localProvider) input.localProvider = localProvider as RuntimeProfileInput["localProvider"];
   const useOss = optionalBoolean(body.useOss);
@@ -610,6 +781,138 @@ function toRuntimeProfileInput(body: Record<string, unknown>, partial = false): 
     input.apiKey = optionalString(body.apiKey);
   }
   return input as RuntimeProfileInput;
+}
+
+function buildRuntimeProfileProbeInput(profile: {
+  id: string;
+  providerMode: string | null;
+  model: string | null;
+  sandboxMode: string | null;
+  approvalPolicy: string | null;
+  codexProfile: string | null;
+  baseUrl: string | null;
+  bridgeBaseUrl: string | null;
+  wireApi: string | null;
+  authEnvKey: string | null;
+  localProvider: "lmstudio" | "ollama" | null;
+  useOss: boolean;
+}) {
+  const providerId = sanitizeProviderId(profile.id);
+  const providerBaseUrl = profile.providerMode === "deepseek-via-responses-bridge"
+    ? profile.bridgeBaseUrl
+    : profile.providerMode === "openai-responses"
+      ? profile.baseUrl
+      : null;
+  return {
+    model: profile.model ?? undefined,
+    sandboxMode: profile.sandboxMode ?? undefined,
+    approvalPolicy: profile.approvalPolicy ?? undefined,
+    codexProfile: profile.codexProfile ?? undefined,
+    useOss: profile.useOss,
+    localProvider: profile.localProvider ?? undefined,
+    modelProviderId: providerBaseUrl ? providerId : undefined,
+    modelProviderBaseUrl: providerBaseUrl ?? undefined,
+    modelProviderWireApi: profile.wireApi ?? "responses",
+    apiKeyEnvName: profile.authEnvKey ?? `CODEX_RUNTIME_PROFILE_${providerId.toUpperCase()}_API_KEY`
+  };
+}
+
+async function runUpstreamProbe(profile: { baseUrl: string | null; model: string | null; apiKey: string | null }) {
+  if (!profile.baseUrl || !profile.model || !profile.apiKey) {
+    return { ok: false, skipped: true, errorText: "baseUrl, model, or API key missing" };
+  }
+  const url = `${profile.baseUrl.replace(/\/$/, "")}/chat/completions`;
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${profile.apiKey}`
+      },
+      body: JSON.stringify({
+        model: profile.model,
+        messages: [{ role: "user", content: "Return exactly OPENIM_CODEX_BRIDGE_OK." }],
+        max_tokens: 16,
+        stream: false
+      }),
+      signal: AbortSignal.timeout(30000)
+    });
+    if (!response.ok) {
+      return { ok: false, skipped: false, status: response.status, errorText: await response.text().then(redactSecretsInText) };
+    }
+    return { ok: true, skipped: false, status: response.status };
+  } catch (error) {
+    return { ok: false, skipped: false, errorText: error instanceof Error ? redactSecretsInText(error.message) : String(error) };
+  }
+}
+
+async function runCodexProbe(input: {
+  codexBin: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  codexHomeDir?: string;
+  timeoutMs: number;
+}) {
+  const tempDir = await mkdtemp(join(tmpdir(), "openim-codex-probe-"));
+  await writeFile(join(tempDir, "README.md"), "Codex runtime probe workspace.\n");
+  const args = [
+    "exec",
+    "--ephemeral",
+    "--json",
+    "--skip-git-repo-check",
+    "--cd",
+    tempDir,
+    ...input.args,
+    "-"
+  ];
+  return new Promise<Record<string, unknown>>((resolve) => {
+    const child = spawn(input.codexBin, args, {
+      env: { ...process.env, ...input.env, CODEX_HOME: input.codexHomeDir ?? input.env.CODEX_HOME },
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+      shell: process.platform === "win32"
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGINT");
+    }, input.timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      void rm(tempDir, { recursive: true, force: true });
+      resolve({ ok: false, skipped: false, codexArgs: input.args, env: redactRuntimeEnv(input.env), errorText: redactSecretsInText(error.message) });
+    });
+    child.on("close", (exitCode) => {
+      clearTimeout(timer);
+      void rm(tempDir, { recursive: true, force: true });
+      resolve({
+        ok: exitCode === 0,
+        skipped: false,
+        codexArgs: input.args,
+        env: redactRuntimeEnv(input.env),
+        exitCode,
+        outputPreview: redactSecretsInText(stdout).slice(-1000),
+        errorText: stderr.trim() ? redactSecretsInText(stderr).slice(-1000) : undefined
+      });
+    });
+    child.stdin.end("Return exactly: OPENIM_CODEX_BRIDGE_OK.");
+  });
+}
+
+function sanitizeProviderId(value: string): string {
+  return value.replace(/[^A-Za-z0-9_]/g, "_");
+}
+
+function redactSecretsInText(value: string): string {
+  return value.replace(/sk-[A-Za-z0-9_-]+/g, "sk-****");
 }
 
 function redactRuntimeEnv(env: NodeJS.ProcessEnv): Record<string, string> {

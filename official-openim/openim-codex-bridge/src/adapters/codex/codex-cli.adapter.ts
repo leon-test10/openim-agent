@@ -22,6 +22,7 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
     return this.run(args, input.prompt, input.onEvent, {
       codexHomeDir: input.codexHomeDir,
       apiKey: input.apiKey,
+      apiKeyEnvName: input.apiKeyEnvName,
       baseUrl: input.baseUrl
     });
   }
@@ -37,6 +38,7 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
     return this.run(args, input.prompt, input.onEvent, {
       codexHomeDir: input.codexHomeDir,
       apiKey: input.apiKey,
+      apiKeyEnvName: input.apiKeyEnvName,
       baseUrl: input.baseUrl
     });
   }
@@ -45,7 +47,7 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
     args: string[],
     prompt: string,
     onEvent?: (event: Record<string, unknown>) => void,
-    runtimeEnv?: { codexHomeDir?: string; apiKey?: string; baseUrl?: string }
+    runtimeEnv?: { codexHomeDir?: string; apiKey?: string; apiKeyEnvName?: string; baseUrl?: string }
   ): CodexRunHandle {
     const child = spawn(this.options.codexBin, args, {
       env: buildCodexRuntimeEnv(process.env, runtimeEnv ?? {}),
@@ -138,8 +140,30 @@ export class SpawnCodexCliAdapter implements CodexCliAdapter {
   }
 }
 
-export function buildCodexRuntimeArgs(input: Pick<CodexRunInput, "model" | "sandboxMode" | "approvalPolicy" | "codexProfile" | "useOss" | "localProvider">): string[] {
+export function buildCodexRuntimeArgs(
+  input: Pick<
+    CodexRunInput,
+    | "model"
+    | "sandboxMode"
+    | "approvalPolicy"
+    | "codexProfile"
+    | "useOss"
+    | "localProvider"
+    | "modelProviderId"
+    | "modelProviderBaseUrl"
+    | "modelProviderWireApi"
+    | "apiKeyEnvName"
+  >
+): string[] {
   const args: string[] = [];
+  if (input.modelProviderId && input.modelProviderBaseUrl) {
+    args.push("-c", `model_provider=${tomlString(input.modelProviderId)}`);
+    args.push("-c", `model_providers.${input.modelProviderId}.base_url=${tomlString(input.modelProviderBaseUrl)}`);
+    args.push("-c", `model_providers.${input.modelProviderId}.wire_api=${tomlString(input.modelProviderWireApi ?? "responses")}`);
+    if (input.apiKeyEnvName) {
+      args.push("-c", `model_providers.${input.modelProviderId}.env_key=${tomlString(input.apiKeyEnvName)}`);
+    }
+  }
   if (input.sandboxMode) {
     args.push("--sandbox", input.sandboxMode);
   }
@@ -163,7 +187,7 @@ export function buildCodexRuntimeArgs(input: Pick<CodexRunInput, "model" | "sand
 
 export function buildCodexRuntimeEnv(
   baseEnv: NodeJS.ProcessEnv,
-  input: { codexHomeDir?: string; apiKey?: string; baseUrl?: string }
+  input: { codexHomeDir?: string; apiKey?: string; apiKeyEnvName?: string; baseUrl?: string }
 ): NodeJS.ProcessEnv {
   const env = { ...baseEnv };
   if (input.codexHomeDir) {
@@ -171,12 +195,19 @@ export function buildCodexRuntimeEnv(
   }
   if (input.apiKey) {
     env.OPENAI_API_KEY = input.apiKey;
+    if (input.apiKeyEnvName) {
+      env[input.apiKeyEnvName] = input.apiKey;
+    }
   }
   if (input.baseUrl) {
     env.OPENAI_BASE_URL = input.baseUrl;
     env.OPENAI_API_BASE_URL = input.baseUrl;
   }
   return env;
+}
+
+function tomlString(value: string): string {
+  return JSON.stringify(value);
 }
 
 function killProcessTree(pid: number | undefined): Promise<void> {

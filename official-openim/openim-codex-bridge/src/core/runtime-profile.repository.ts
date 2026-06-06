@@ -7,11 +7,16 @@ interface RuntimeProfileRow {
   id: string;
   name: string;
   provider_type: RuntimeProfile["providerType"];
+  provider_mode: RuntimeProfile["providerMode"];
   model: string | null;
   sandbox_mode: string | null;
   approval_policy: string | null;
   codex_profile: string | null;
   base_url: string | null;
+  bridge_base_url: string | null;
+  wire_api: string | null;
+  auth_env_key: string | null;
+  codex_home_override: string | null;
   local_provider: RuntimeProfile["localProvider"];
   use_oss: number;
   api_key_encrypted: string | null;
@@ -77,12 +82,14 @@ export class RuntimeProfileRepository {
         `
         INSERT INTO codex_runtime_profiles (
           id, name, provider_type, model, sandbox_mode, approval_policy,
-          codex_profile, base_url, local_provider, use_oss,
+          codex_profile, base_url, provider_mode, bridge_base_url, wire_api,
+          auth_env_key, codex_home_override, local_provider, use_oss,
           api_key_encrypted, api_key_iv, api_key_tag, api_key_masked,
           status, created_at, updated_at
         ) VALUES (
           @id, @name, @providerType, @model, @sandboxMode, @approvalPolicy,
-          @codexProfile, @baseUrl, @localProvider, @useOss,
+          @codexProfile, @baseUrl, @providerMode, @bridgeBaseUrl, @wireApi,
+          @authEnvKey, @codexHomeOverride, @localProvider, @useOss,
           @apiKeyEncrypted, @apiKeyIv, @apiKeyTag, @apiKeyMasked,
           'active', @createdAt, @updatedAt
         )
@@ -114,6 +121,11 @@ export class RuntimeProfileRepository {
       approvalPolicy: input.approvalPolicy ?? existing.approvalPolicy,
       codexProfile: input.codexProfile ?? existing.codexProfile,
       baseUrl: input.baseUrl ?? existing.baseUrl,
+      providerMode: input.providerMode ?? existing.providerMode,
+      bridgeBaseUrl: input.bridgeBaseUrl ?? existing.bridgeBaseUrl,
+      wireApi: input.wireApi ?? existing.wireApi,
+      authEnvKey: input.authEnvKey ?? existing.authEnvKey,
+      codexHomeOverride: input.codexHomeOverride ?? existing.codexHomeOverride,
       localProvider: input.localProvider ?? existing.localProvider,
       useOss: input.useOss ?? existing.useOss
     });
@@ -128,6 +140,11 @@ export class RuntimeProfileRepository {
             approval_policy = @approvalPolicy,
             codex_profile = @codexProfile,
             base_url = @baseUrl,
+            provider_mode = @providerMode,
+            bridge_base_url = @bridgeBaseUrl,
+            wire_api = @wireApi,
+            auth_env_key = @authEnvKey,
+            codex_home_override = @codexHomeOverride,
             local_provider = @localProvider,
             use_oss = @useOss,
             api_key_encrypted = @apiKeyEncrypted,
@@ -163,11 +180,16 @@ function normalizeInput(input: RuntimeProfileInput) {
   return {
     name: normalizeRequired(input.name, "name"),
     providerType: input.providerType ?? "openai",
+    providerMode: normalizeOptional(input.providerMode) as RuntimeProfile["providerMode"],
     model: normalizeOptional(input.model),
     sandboxMode: normalizeOptional(input.sandboxMode),
     approvalPolicy: normalizeOptional(input.approvalPolicy),
     codexProfile: normalizeOptional(input.codexProfile),
     baseUrl: normalizeOptional(input.baseUrl),
+    bridgeBaseUrl: normalizeOptional(input.bridgeBaseUrl),
+    wireApi: normalizeOptional(input.wireApi),
+    authEnvKey: normalizeOptional(input.authEnvKey),
+    codexHomeOverride: normalizeOptional(input.codexHomeOverride),
     localProvider: normalizeOptional(input.localProvider) as RuntimeProfile["localProvider"],
     useOss: input.useOss ? 1 : 0
   };
@@ -229,11 +251,16 @@ function mapRuntimeProfileRow(row: RuntimeProfileRow): RuntimeProfile {
     id: row.id,
     name: row.name,
     providerType: row.provider_type,
+    providerMode: row.provider_mode,
     model: row.model,
     sandboxMode: row.sandbox_mode,
     approvalPolicy: row.approval_policy,
     codexProfile: row.codex_profile,
     baseUrl: row.base_url,
+    bridgeBaseUrl: row.bridge_base_url,
+    wireApi: row.wire_api,
+    authEnvKey: row.auth_env_key,
+    codexHomeOverride: row.codex_home_override,
     localProvider: row.local_provider,
     useOss: row.use_oss === 1,
     apiKeyMasked: row.api_key_masked,

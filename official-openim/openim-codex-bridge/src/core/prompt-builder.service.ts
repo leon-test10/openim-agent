@@ -3,29 +3,55 @@ export interface BuildCodexPromptInput {
   codexProjectPath: string;
   codexSessionId: string | null;
   userText: string;
+  openimHistoryMessages?: Array<{
+    sendID?: string;
+    senderNickname?: string;
+    sendTime?: number;
+    text?: string;
+    preview?: string;
+  }>;
 }
 
 export function buildCodexPrompt(input: BuildCodexPromptInput): string {
   return [
-    "你是通过 OpenIM 会话连接到用户的 Codex coding agent。",
+    "You are a Codex coding agent connected to the user through an OpenIM conversation.",
     "",
     "OpenIM conversation_id:",
     input.openimConversationId,
     "",
-    "项目目录:",
+    "Project directory:",
     input.codexProjectPath,
     "",
     "Codex session_id:",
     input.codexSessionId ?? "(new session)",
     "",
-    "用户新消息:",
+    ...buildHistoryBlock(input.openimHistoryMessages),
+    "User new message:",
     input.userText,
     "",
-    "执行要求:",
-    "1. 先理解用户意图。",
-    "2. 如果需要查看代码，请直接使用 Codex CLI 能力。",
-    "3. 回复时说明你做了什么、发现了什么、下一步建议。",
-    "4. 不要编造不存在的文件或结果。"
+    "Execution requirements:",
+    "1. Understand the user's intent before acting.",
+    "2. If code inspection is needed, use the available Codex CLI capabilities.",
+    "3. In the reply, explain what you did, what you found, and the next step.",
+    "4. Do not invent files, command results, or OpenIM history that is not present in this prompt."
   ].join("\n");
 }
 
+function buildHistoryBlock(messages: BuildCodexPromptInput["openimHistoryMessages"]): string[] {
+  if (!messages?.length) {
+    return [];
+  }
+
+  const lines = messages.slice(-80).map((message) => {
+    const actor = message.senderNickname || message.sendID || "unknown";
+    const text = message.text || message.preview || "";
+    const time = message.sendTime ? new Date(message.sendTime).toISOString() : "";
+    return `[${time}] ${actor}: ${text}`.trim();
+  });
+
+  return [
+    "OpenIM imported history:",
+    ...lines,
+    ""
+  ];
+}

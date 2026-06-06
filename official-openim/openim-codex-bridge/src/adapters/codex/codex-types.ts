@@ -10,6 +10,10 @@ export interface CodexRunInput {
   localProvider?: "lmstudio" | "ollama";
   useOss?: boolean;
   apiKey?: string;
+  apiKeyEnvName?: string;
+  modelProviderId?: string;
+  modelProviderBaseUrl?: string;
+  modelProviderWireApi?: string;
   onEvent?: (event: Record<string, unknown>) => void;
 }
 
@@ -26,6 +30,10 @@ export interface CodexResumeInput {
   localProvider?: "lmstudio" | "ollama";
   useOss?: boolean;
   apiKey?: string;
+  apiKeyEnvName?: string;
+  modelProviderId?: string;
+  modelProviderBaseUrl?: string;
+  modelProviderWireApi?: string;
   onEvent?: (event: Record<string, unknown>) => void;
 }
 

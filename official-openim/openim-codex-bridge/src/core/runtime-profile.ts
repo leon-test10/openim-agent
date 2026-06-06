@@ -1,14 +1,20 @@
 export type RuntimeProviderType = "openai" | "openai-compatible" | "oss-local";
+export type RuntimeProviderMode = "openai-responses" | "deepseek-via-responses-bridge" | "openai-chat-probe-only";
 
 export interface RuntimeProfile {
   id: string;
   name: string;
   providerType: RuntimeProviderType;
+  providerMode: RuntimeProviderMode | null;
   model: string | null;
   sandboxMode: string | null;
   approvalPolicy: string | null;
   codexProfile: string | null;
   baseUrl: string | null;
+  bridgeBaseUrl: string | null;
+  wireApi: string | null;
+  authEnvKey: string | null;
+  codexHomeOverride: string | null;
   localProvider: "lmstudio" | "ollama" | null;
   useOss: boolean;
   apiKeyMasked: string | null;
@@ -24,11 +30,16 @@ export interface RuntimeProfileSecret extends RuntimeProfile {
 export interface RuntimeProfileInput {
   name: string;
   providerType?: RuntimeProviderType;
+  providerMode?: RuntimeProviderMode | null;
   model?: string | null;
   sandboxMode?: string | null;
   approvalPolicy?: string | null;
   codexProfile?: string | null;
   baseUrl?: string | null;
+  bridgeBaseUrl?: string | null;
+  wireApi?: string | null;
+  authEnvKey?: string | null;
+  codexHomeOverride?: string | null;
   localProvider?: "lmstudio" | "ollama" | null;
   useOss?: boolean;
   apiKey?: string | null;

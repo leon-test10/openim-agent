@@ -1,4 +1,5 @@
 import { mkdtempSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -10,6 +11,7 @@ import { SessionBindingRepository } from "../../src/core/session-binding.reposit
 import { RuntimeJobRepository } from "../../src/core/runtime-job.repository.js";
 import { RuntimeEventRepository } from "../../src/core/runtime-event.repository.js";
 import { RuntimeProfileRepository } from "../../src/core/runtime-profile.repository.js";
+import { OpenImHistoryRepository } from "../../src/core/openim-history.repository.js";
 import { createServer } from "../../src/server.js";
 import type { AppContext } from "../../src/app-context.js";
 import type { SemanticEvent } from "../../src/core/semantic-event.js";
@@ -60,6 +62,7 @@ function createTempContext(overrides: Partial<Pick<AppContext, "codex" | "openim
     jobs: new RuntimeJobRepository(db),
     runtimeEvents: new RuntimeEventRepository(db),
     runtimeProfiles: new RuntimeProfileRepository(db, config.BRIDGE_SECRET_KEY),
+    openimHistory: new OpenImHistoryRepository(db),
     codex: overrides.codex ?? {
       runNewTask: async () => ({ ok: true, outputText: "ok", rawOutput: "" }),
       resumeTask: async () => ({ ok: true, outputText: "ok", rawOutput: "" })
@@ -105,7 +108,7 @@ describe("status API", () => {
 
     const health = await app.inject({ method: "GET", url: "/healthz" });
     expect(health.statusCode).toBe(200);
-    expect(health.json()).toMatchObject({ ok: true, apiVersion: "2026-06-05.phase3g" });
+    expect(health.json()).toMatchObject({ ok: true, apiVersion: "2026-06-06.phase3i" });
 
     const preflight = await app.inject({
       method: "OPTIONS",
@@ -193,7 +196,8 @@ describe("status API", () => {
       activeJob: null,
       latestJob: null,
       recentJobs: [],
-      queuedJobCount: 0
+      queuedJobCount: 0,
+      pendingHistoryImport: null
     });
 
     const binding = await app.inject({
@@ -522,15 +526,24 @@ describe("status API", () => {
 
     const test = await app.inject({
       method: "POST",
-      url: `/api/runtime-profiles/${created.json().id}/test`
+      url: `/api/runtime-profiles/${created.json().id}/test`,
+      payload: {
+        upstreamProbe: false,
+        codexProbe: false
+      }
     });
     expect(test.statusCode).toBe(200);
     expect(test.json()).toMatchObject({
       ok: true,
       profile: { id: created.json().id, apiKeyMasked: "sk-l...3456" },
-      codexArgs: expect.arrayContaining(["--model", "gpt-5", "--profile", "dev"])
+      upstreamProbe: { ok: false, skipped: true },
+      codexProbe: {
+        ok: true,
+        skipped: true,
+        codexArgs: expect.arrayContaining(["--model", "gpt-5", "--profile", "dev"])
+      }
     });
-    expect(test.json().env.OPENAI_API_KEY).toBe("****");
+    expect(test.json().codexProbe.env.OPENAI_API_KEY).toBe("****");
 
     const deleted = await app.inject({
       method: "DELETE",
@@ -538,6 +551,113 @@ describe("status API", () => {
     });
     expect(deleted.statusCode).toBe(200);
     expect(deleted.json()).toMatchObject({ status: "deleted" });
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("reports session resume diagnostics including rollout availability", async () => {
+    const context = createTempContext();
+    const app = await createServer(context, pino({ level: "silent" }));
+    const session = context.sessions.getOrCreateActiveSession({
+      openimConversationId: event.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    context.sessions.updateCodexSessionId(session.id, "thread_ready");
+    const withRuntime = context.sessions.ensureRuntimeFields(session.id)!;
+    const rolloutDir = join(withRuntime.codexHomeDir!, "sessions", "2026", "06", "06");
+    mkdirSync(rolloutDir, { recursive: true });
+    writeFileSync(join(rolloutDir, "rollout-2026-06-06T00-00-00-thread_ready.jsonl"), "{}\n");
+
+    const diagnostics = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions/${session.id}/diagnostics`
+    });
+    expect(diagnostics.statusCode).toBe(200);
+    expect(diagnostics.json()).toMatchObject({
+      sessionRecordId: session.id,
+      codexSessionId: "thread_ready",
+      homeExists: true,
+      rolloutExists: true,
+      resumeReady: true,
+      lastJobId: null,
+      lastResumeFailure: null
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions`,
+      payload: { openimDisplayUserId: "user_1", codexProjectPath: "/workspace/demo" }
+    });
+    const missing = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions/${created.json().id}/diagnostics`
+    });
+    expect(missing.statusCode).toBe(200);
+    expect(missing.json()).toMatchObject({
+      codexSessionId: null,
+      rolloutExists: false,
+      resumeReady: false
+    });
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("treats load-history text commands as history import requests instead of Codex jobs", async () => {
+    const sentTexts: string[] = [];
+    const context = createTempContext({
+      openimSender: {
+        sendBotText: async (message) => {
+          sentTexts.push(message.text);
+        }
+      }
+    });
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const webhook = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-single-msg",
+      payload: {
+        sendID: "user_1",
+        recvID: "codex_bot",
+        conversationID: event.openimConversationId,
+        contentType: 101,
+        content: JSON.stringify({ content: "/load_history 80" })
+      }
+    });
+    expect(webhook.statusCode).toBe(200);
+    expect(webhook.json()).toMatchObject({
+      data: { ignored: false, command: "load_history", requestedCount: 80 }
+    });
+    expect(context.jobs.listRecentByConversationId(event.openimConversationId)).toHaveLength(0);
+    expect(sentTexts[0]).toContain("OpenIM history import requested");
+
+    const status = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/status`
+    });
+    expect(status.json()).toMatchObject({
+      pendingHistoryImport: {
+        openimConversationId: event.openimConversationId,
+        requestedCount: 80,
+        status: "pending"
+      }
+    });
+
+    const snapshot = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/openim-history-snapshots`,
+      payload: {
+        requestId: status.json().pendingHistoryImport.id,
+        messages: [
+          { clientMsgID: "m1", sendID: "user_1", senderNickname: "User", contentType: 101, text: "你之前说过什么" }
+        ]
+      }
+    });
+    expect(snapshot.statusCode).toBe(201);
+    expect(snapshot.json()).toMatchObject({ messageCount: 1 });
 
     await app.close();
     context.db.close();
@@ -838,20 +958,34 @@ describe("status API", () => {
     const jobId = webhook.json().data.jobId as string;
     await waitFor(() => context.jobs.getById(jobId)?.status === "succeeded");
 
-    expect(context.runtimeEvents.listByJobId(jobId)).toMatchObject([
-      {
-        sequence: 1,
-        eventType: "agent_message",
-        title: "agent_message",
-        summary: "thinking visibly"
-      },
-      {
-        sequence: 2,
-        eventType: "item.started",
-        title: "tool_call",
-        summary: "shell: git status --short"
-      }
-    ]);
+    const runtimeEvents = context.runtimeEvents.listByJobId(jobId);
+    expect(runtimeEvents.map((runtimeEvent) => runtimeEvent.eventType)).toEqual(
+      expect.arrayContaining([
+        "bridge.webhook_received",
+        "bridge.worker_started",
+        "codex.first_event",
+        "agent_message",
+        "item.started",
+        "codex.process_spawned",
+        "codex.process_completed",
+        "openim.reply_started",
+        "openim.reply_completed"
+      ])
+    );
+    expect(runtimeEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "agent_message",
+          title: "agent_message",
+          summary: "thinking visibly"
+        }),
+        expect.objectContaining({
+          eventType: "item.started",
+          title: "tool_call",
+          summary: "shell: git status --short"
+        })
+      ])
+    );
     expect(capturedInput?.codexHomeDir).toContain("codex-homes");
 
     await app.close();

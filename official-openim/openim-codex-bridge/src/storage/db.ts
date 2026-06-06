@@ -80,11 +80,16 @@ function migrate(db: BridgeDatabase): void {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       provider_type TEXT NOT NULL,
+      provider_mode TEXT,
       model TEXT,
       sandbox_mode TEXT,
       approval_policy TEXT,
       codex_profile TEXT,
       base_url TEXT,
+      bridge_base_url TEXT,
+      wire_api TEXT,
+      auth_env_key TEXT,
+      codex_home_override TEXT,
       local_provider TEXT,
       use_oss INTEGER NOT NULL DEFAULT 0,
       api_key_encrypted TEXT,
@@ -136,6 +141,25 @@ function migrate(db: BridgeDatabase): void {
       created_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS openim_history_import_requests (
+      id TEXT PRIMARY KEY,
+      openim_conversation_id TEXT NOT NULL,
+      requested_count INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      fulfilled_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS openim_history_snapshots (
+      id TEXT PRIMARY KEY,
+      request_id TEXT,
+      openim_conversation_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      message_count INTEGER NOT NULL,
+      messages_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
     CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_events_job_sequence
       ON runtime_events(job_id, sequence);
 
@@ -154,6 +178,11 @@ function migrate(db: BridgeDatabase): void {
   ensureColumn(db, "codex_session_records", "display_name", "TEXT");
   ensureColumn(db, "codex_session_records", "display_name_source", "TEXT");
   ensureColumn(db, "codex_session_records", "last_summary", "TEXT");
+  ensureColumn(db, "codex_runtime_profiles", "provider_mode", "TEXT");
+  ensureColumn(db, "codex_runtime_profiles", "bridge_base_url", "TEXT");
+  ensureColumn(db, "codex_runtime_profiles", "wire_api", "TEXT");
+  ensureColumn(db, "codex_runtime_profiles", "auth_env_key", "TEXT");
+  ensureColumn(db, "codex_runtime_profiles", "codex_home_override", "TEXT");
 }
 
 function ensureColumn(db: BridgeDatabase, tableName: string, columnName: string, columnType: string): void {
