@@ -132,9 +132,15 @@ CODEX_SESSION_HOME_MODE=per-session
 CODEX_SESSION_HOME_SEED_MODE=copy-auth-only
 CODEX_BASE_HOME=
 CODEX_SANDBOX_MODE=
+CODEX_WORKSPACE_ALLOWLIST=/workspace/openim-demo
+CODEX_RUNTIME_ADMIN_TOKEN=
+CONTEXT_RECENT_EVENT_LIMIT=30
+CONTEXT_AUTO_SUMMARY_ENABLED=false
+CONTEXT_SUMMARY_EVENT_THRESHOLD=120
 
 DATABASE_URL=file:./data/openim-codex-bridge.sqlite
 LOG_LEVEL=info
+NODE_ENV=development
 ```
 
 Set either `OPENIM_ADMIN_TOKEN` or `OPENIM_ADMIN_SECRET`. If `OPENIM_ADMIN_TOKEN` is present, the bridge uses it directly. Otherwise it attempts to fetch an admin token from `/auth/get_admin_token`.
@@ -212,10 +218,28 @@ GET /api/jobs/:jobId/events/stream
 POST /api/jobs/:jobId/cancel
 POST /api/jobs/:jobId/retry
 GET /api/conversations/:conversationId/status
+GET /api/conversations/:conversationId/events/stream
+GET /api/conversations/:conversationId/semantic-events
+GET /api/conversations/:conversationId/context/preview
+GET /api/conversations/:conversationId/context/summary
+POST /api/conversations/:conversationId/context/summarize
 GET /api/conversations/:conversationId/codex-sessions
 POST /api/conversations/:conversationId/codex-sessions
 POST /api/conversations/:conversationId/codex-sessions/:sessionRecordId/activate
+PATCH /api/conversations/:conversationId/codex-sessions/:sessionRecordId
+POST /api/conversations/:conversationId/codex-sessions/:sessionRecordId/archive
+POST /api/conversations/:conversationId/codex-sessions/:sessionRecordId/restore
+DELETE /api/conversations/:conversationId/codex-sessions/:sessionRecordId
+GET /api/conversations/:conversationId/codex-sessions/:sessionRecordId/diagnostics
+POST /api/conversations/:conversationId/openim-history-snapshots
+GET /api/runtime-profiles
+POST /api/runtime-profiles
+PATCH /api/runtime-profiles/:profileId
+DELETE /api/runtime-profiles/:profileId
+POST /api/runtime-profiles/:profileId/test
 ```
+
+The detailed Electron-facing API contract is tracked in `API_CONTRACT.md`.
 
 List active OpenIM conversation bindings:
 
@@ -268,6 +292,17 @@ Subscribe to runtime events with Server-Sent Events:
 ```bash
 curl -N "http://localhost:8787/api/jobs/<jobId>/events/stream"
 ```
+
+Electron should prefer the conversation-level SSE stream and keep the job-level stream only as a
+compatibility surface:
+
+```bash
+curl -N "http://localhost:8787/api/conversations/single%3Acodex_bot%3Auser_1/events/stream"
+```
+
+Conversation-level SSE emits `job_created`, `job_queued`, `job_started`, `runtime_event`,
+`job_succeeded`, `job_failed`, `job_cancelled`, `session_changed`, `binding_changed`, and
+`history_import_requested`.
 
 The bridge records Codex CLI `--json` JSONL events as `runtime_events`. These are intended for
 status, tool-call, command, stderr/stdout-summary, and final-message UI. They are not hidden model

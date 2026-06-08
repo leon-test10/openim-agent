@@ -7,11 +7,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import pino from "pino";
 import { openDatabase } from "../../src/storage/db.js";
 import { SemanticEventRepository } from "../../src/core/semantic-event.repository.js";
+import { ConversationSummaryRepository } from "../../src/core/conversation-summary.repository.js";
 import { SessionBindingRepository } from "../../src/core/session-binding.repository.js";
 import { RuntimeJobRepository } from "../../src/core/runtime-job.repository.js";
 import { RuntimeEventRepository } from "../../src/core/runtime-event.repository.js";
 import { RuntimeProfileRepository } from "../../src/core/runtime-profile.repository.js";
 import { OpenImHistoryRepository } from "../../src/core/openim-history.repository.js";
+import { ConversationEventBus } from "../../src/core/conversation-event-bus.js";
 import { createServer } from "../../src/server.js";
 import type { AppContext } from "../../src/app-context.js";
 import type { SemanticEvent } from "../../src/core/semantic-event.js";
@@ -45,14 +47,21 @@ function createTempContext(overrides: Partial<Pick<AppContext, "codex" | "openim
     CODEX_SESSION_HOME_SEED_MODE: "copy-auth-only" as const,
     CODEX_BASE_HOME: "",
     CODEX_SANDBOX_MODE: "",
+    CODEX_WORKSPACE_ALLOWLIST: "/workspace/demo;/workspace/new;/workspace/other",
+    CODEX_RUNTIME_ADMIN_TOKEN: "",
+    CONTEXT_RECENT_EVENT_LIMIT: 30,
+    CONTEXT_AUTO_SUMMARY_ENABLED: false,
+    CONTEXT_SUMMARY_EVENT_THRESHOLD: 120,
     BRIDGE_SECRET_KEY: "0123456789abcdef0123456789abcdef",
     DATABASE_URL: `file:${join(dir, "bridge.sqlite")}`,
-    LOG_LEVEL: "silent"
+    LOG_LEVEL: "silent",
+    NODE_ENV: "development"
   };
   return {
     config,
     db,
     semanticEvents: new SemanticEventRepository(db),
+    conversationSummaries: new ConversationSummaryRepository(db),
     sessions: new SessionBindingRepository(db, {
       codexSessionHomeMode: config.CODEX_SESSION_HOME_MODE,
       codexSessionHomeRoot: config.CODEX_SESSION_HOME_ROOT,
@@ -63,6 +72,7 @@ function createTempContext(overrides: Partial<Pick<AppContext, "codex" | "openim
     runtimeEvents: new RuntimeEventRepository(db),
     runtimeProfiles: new RuntimeProfileRepository(db, config.BRIDGE_SECRET_KEY),
     openimHistory: new OpenImHistoryRepository(db),
+    conversationEvents: new ConversationEventBus(),
     codex: overrides.codex ?? {
       runNewTask: async () => ({ ok: true, outputText: "ok", rawOutput: "" }),
       resumeTask: async () => ({ ok: true, outputText: "ok", rawOutput: "" })
@@ -556,6 +566,164 @@ describe("status API", () => {
     context.db.close();
   });
 
+  it("enforces production runtime profile permissions server-side", async () => {
+    const context = createTempContext();
+    context.config.NODE_ENV = "production";
+    context.config.CODEX_RUNTIME_ADMIN_TOKEN = "admin-token";
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const denied = await app.inject({
+      method: "POST",
+      url: "/api/runtime-profiles",
+      payload: {
+        name: "Unsafe production profile",
+        sandboxMode: "danger-full-access",
+        codexHomeOverride: "/tmp/codex-home"
+      }
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json()).toMatchObject({
+      error: "runtime_profile_admin_required"
+    });
+
+    const safe = await app.inject({
+      method: "POST",
+      url: "/api/runtime-profiles",
+      headers: { "x-codex-admin-token": "admin-token" },
+      payload: {
+        name: "Admin profile",
+        sandboxMode: "danger-full-access",
+        codexHomeOverride: "/tmp/codex-home",
+        apiKey: "sk-prod-hidden"
+      }
+    });
+    expect(safe.statusCode).toBe(201);
+    expect(safe.json()).toMatchObject({
+      name: "Admin profile",
+      sandboxMode: "danger-full-access",
+      codexHomeOverride: "/tmp/codex-home",
+      apiKeyMasked: "sk-p...dden"
+    });
+    expect(safe.json().apiKey).toBeUndefined();
+
+    const visibleWithoutAdmin = await app.inject({ method: "GET", url: "/api/runtime-profiles" });
+    expect(visibleWithoutAdmin.json().profiles[0]).toMatchObject({
+      id: safe.json().id,
+      codexHomeOverride: null,
+      apiKeyMasked: "sk-p...dden"
+    });
+    expect(visibleWithoutAdmin.json().profiles[0].apiKey).toBeUndefined();
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("rejects project paths outside the configured allowlist and reports diagnostics", async () => {
+    const context = createTempContext();
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions`,
+      payload: {
+        openimDisplayUserId: "user_1",
+        codexProjectPath: "/etc"
+      }
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json()).toMatchObject({
+      error: "project_path_not_allowed",
+      diagnostics: {
+        requestedPath: "/etc",
+        normalizedPath: "/etc",
+        reason: "outside_allowlist"
+      }
+    });
+
+    const escaped = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions`,
+      payload: {
+        openimDisplayUserId: "user_1",
+        codexProjectPath: "/workspace/demo/../secret"
+      }
+    });
+    expect(escaped.statusCode).toBe(400);
+    expect(escaped.json()).toMatchObject({
+      diagnostics: { reason: "contains_parent_segment" }
+    });
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("publishes conversation-level events for history, job, runtime, and session changes", async () => {
+    const seen: string[] = [];
+    const context = createTempContext({
+      codex: {
+        runNewTask: async () => ({ ok: true, outputText: "unused", rawOutput: "" }),
+        resumeTask: async () => ({ ok: true, outputText: "unused", rawOutput: "" }),
+        runNewTaskCancellable: (input): CodexRunHandle => {
+          input.onEvent?.({ type: "agent_message", message: "event stream visible" });
+          return {
+            pid: 1234,
+            promise: Promise.resolve({
+              ok: true,
+              sessionId: "thread_stream",
+              outputText: "done",
+              rawOutput: ""
+            }),
+            cancel: async () => undefined
+          };
+        }
+      }
+    });
+    context.conversationEvents!.subscribe(event.openimConversationId, (streamEvent) => {
+      seen.push(streamEvent.type);
+    });
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-single-msg",
+      payload: {
+        sendID: "user_1",
+        recvID: "codex_bot",
+        conversationID: event.openimConversationId,
+        contentType: 101,
+        content: JSON.stringify({ content: "/load_history 10" })
+      }
+    });
+    const webhook = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-single-msg",
+      payload: {
+        sendID: "user_1",
+        recvID: "codex_bot",
+        conversationID: event.openimConversationId,
+        contentType: 101,
+        content: JSON.stringify({ content: "please run" })
+      }
+    });
+    const jobId = webhook.json().data.jobId as string;
+    await waitFor(() => context.jobs.getById(jobId)?.status === "succeeded");
+
+    expect(seen).toEqual(
+      expect.arrayContaining([
+        "history_import_requested",
+        "session_changed",
+        "job_created",
+        "job_queued",
+        "job_started",
+        "runtime_event",
+        "job_succeeded"
+      ])
+    );
+
+    await app.close();
+    context.db.close();
+  });
+
   it("reports session resume diagnostics including rollout availability", async () => {
     const context = createTempContext();
     const app = await createServer(context, pino({ level: "silent" }));
@@ -652,12 +820,64 @@ describe("status API", () => {
       payload: {
         requestId: status.json().pendingHistoryImport.id,
         messages: [
-          { clientMsgID: "m1", sendID: "user_1", senderNickname: "User", contentType: 101, text: "你之前说过什么" }
+          { clientMsgID: "m1", sendID: "user_1", senderNickname: "User", contentType: 101, text: "remember phase four context", sendTime: 1000 },
+          { clientMsgID: "m2", sendID: "codex_bot", senderNickname: "Codex", contentType: 101, text: "assistant context", sendTime: 2000, ex: { agent: { generated_by: "codex" } } },
+          { clientMsgID: "m3", sendID: "user_1", senderNickname: "User", contentType: 102, preview: "image", sendTime: 3000 }
         ]
       }
     });
     expect(snapshot.statusCode).toBe(201);
-    expect(snapshot.json()).toMatchObject({ messageCount: 1 });
+    expect(snapshot.json()).toMatchObject({
+      messageCount: 3,
+      receivedCount: 3,
+      importedCount: 2,
+      skippedUnsupportedCount: 1
+    });
+
+    const duplicate = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/openim-history-snapshots`,
+      payload: {
+        messages: [
+          { clientMsgID: "m1", sendID: "user_1", senderNickname: "User", contentType: 101, text: "remember phase four context", sendTime: 1000 }
+        ]
+      }
+    });
+    expect(duplicate.statusCode).toBe(201);
+    expect(duplicate.json()).toMatchObject({ importedCount: 0, skippedDuplicateCount: 1 });
+
+    const semanticEvents = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/semantic-events`
+    });
+    expect(semanticEvents.statusCode).toBe(200);
+    expect(semanticEvents.json().events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "user", actorType: "human", text: "remember phase four context" }),
+        expect.objectContaining({ role: "assistant", actorType: "codex_bot", text: "assistant context" })
+      ])
+    );
+
+    const summary = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/context/summarize?recentLimit=1`
+    });
+    expect(summary.statusCode).toBe(200);
+    expect(summary.json().summary.coveredEventIDs.length).toBeGreaterThan(0);
+
+    const preview = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/context/preview?includePrompt=true`
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toMatchObject({
+      conversationID: event.openimConversationId,
+      summaryIncluded: true,
+      recentEventCount: 3,
+      roleCounts: { user: 2, assistant: 1 },
+      promptRedacted: true
+    });
+    expect(preview.json().promptPreview).toContain("Recent OpenIM messages:");
 
     await app.close();
     context.db.close();
@@ -944,6 +1164,17 @@ describe("status API", () => {
     const context = createTempContext({ codex });
     const app = await createServer(context, pino({ level: "silent" }));
 
+    await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/openim-history-snapshots`,
+      payload: {
+        messages: [
+          { clientMsgID: "history_1", sendID: "user_1", senderNickname: "User", contentType: 101, text: "prior semantic instruction", sendTime: 1000 },
+          { clientMsgID: "history_2", sendID: "codex_bot", senderNickname: "Codex", contentType: 101, text: "prior assistant answer", sendTime: 2000, ex: { agent: { generated_by: "codex" } } }
+        ]
+      }
+    });
+
     const webhook = await app.inject({
       method: "POST",
       url: "/webhooks/openim/after-send-single-msg",
@@ -987,6 +1218,10 @@ describe("status API", () => {
       ])
     );
     expect(capturedInput?.codexHomeDir).toContain("codex-homes");
+    expect(capturedInput?.prompt).toContain("Recent OpenIM messages:");
+    expect(capturedInput?.prompt).toContain("Human(User): prior semantic instruction");
+    expect(capturedInput?.prompt).toContain("Assistant(Codex): prior assistant answer");
+    expect(capturedInput?.prompt).toContain("Current user message:\nplease inspect status");
 
     await app.close();
     context.db.close();

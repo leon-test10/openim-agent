@@ -14,6 +14,17 @@ import { buildCodexRuntimeArgs, buildCodexRuntimeEnv } from "./adapters/codex/co
 import { CodexRunnerWorker } from "./workers/codex-runner.worker.js";
 import { deriveConversationState, toRuntimeJobView } from "./core/conversation-status.js";
 import type { RuntimeProfileInput } from "./core/runtime-profile.js";
+import { ConversationEventBus, type ConversationStreamEvent } from "./core/conversation-event-bus.js";
+import { SemanticEventIngestService } from "./core/semantic-event-ingest.service.js";
+import { buildContextPreview, ConversationContextBuilder } from "./core/conversation-context.service.js";
+import { buildCodexPrompt } from "./core/prompt-builder.service.js";
+import type { SemanticEvent } from "./core/semantic-event.js";
+import { parseProjectPathAllowlist, validateProjectPath } from "./core/project-path-policy.js";
+import {
+  getRuntimeProfilePolicy,
+  redactRuntimeProfileForPolicy,
+  validateRuntimeProfileInput
+} from "./core/runtime-profile-policy.js";
 
 const BRIDGE_META = {
   name: "openim-codex-bridge",
@@ -30,13 +41,20 @@ const BRIDGE_META = {
     jobCancel: true,
     jobRetry: true,
     runtimeProfiles: true,
+    conversationEvents: true,
     sessionResumeDiagnostics: true,
-    openimHistoryImport: true
+    openimHistoryImport: true,
+    semanticContext: true
   }
 } as const;
 
 export async function createServer(context: AppContext, logger: Logger) {
   const app = Fastify({ loggerInstance: logger });
+  const conversationEvents = context.conversationEvents ?? new ConversationEventBus();
+  context.conversationEvents = conversationEvents;
+  const semanticIngest = new SemanticEventIngestService(context.semanticEvents, {
+    botUserId: context.config.OPENIM_BOT_USER_ID
+  });
   const worker = new CodexRunnerWorker(context, logger);
 
   await app.register(cors, {
@@ -45,12 +63,15 @@ export async function createServer(context: AppContext, logger: Logger) {
   });
   await app.register(sensible);
 
-  app.get("/healthz", async () => ({ ok: true, ...BRIDGE_META }));
-  app.get("/api/meta", async () => BRIDGE_META);
+  app.get("/healthz", async (request) => ({ ok: true, ...buildBridgeMeta(context, request.headers) }));
+  app.get("/api/meta", async (request) => buildBridgeMeta(context, request.headers));
 
   app.get("/api/runtime-profiles", async (request) => {
     const includeDeleted = parseBooleanQuery((request.query as { includeDeleted?: string }).includeDeleted);
-    return { profiles: context.runtimeProfiles.list({ includeDeleted }) };
+    const policy = runtimeProfilePolicyForRequest(context, request.headers);
+    return {
+      profiles: context.runtimeProfiles.list({ includeDeleted }).map((profile) => redactRuntimeProfileForPolicy(profile, policy))
+    };
   });
 
   app.post("/api/runtime-profiles", async (request, reply) => {
@@ -60,8 +81,13 @@ export async function createServer(context: AppContext, logger: Logger) {
       return bridgeApiError(reply, 400, "name_required", "name is required.");
     }
     try {
-      const profile = context.runtimeProfiles.create(toRuntimeProfileInput({ ...body, name }));
-      return reply.code(201).send(profile);
+      const input = toRuntimeProfileInput({ ...body, name });
+      const validation = validateRuntimeProfileInput(input, runtimeProfilePolicyForRequest(context, request.headers));
+      if (!validation.ok) {
+        return bridgeApiError(reply, 403, validation.code, validation.message);
+      }
+      const profile = context.runtimeProfiles.create(input);
+      return reply.code(201).send(redactRuntimeProfileForPolicy(profile, runtimeProfilePolicyForRequest(context, request.headers)));
     } catch (error) {
       return bridgeApiError(reply, 400, "runtime_profile_invalid", error instanceof Error ? error.message : String(error));
     }
@@ -71,26 +97,39 @@ export async function createServer(context: AppContext, logger: Logger) {
     const { profileId } = request.params as { profileId: string };
     const body = isRecord(request.body) ? request.body : {};
     try {
-      const profile = context.runtimeProfiles.update(profileId, toRuntimeProfileInput(body, true));
+      const input = toRuntimeProfileInput(body, true);
+      const validation = validateRuntimeProfileInput(input, runtimeProfilePolicyForRequest(context, request.headers));
+      if (!validation.ok) {
+        return bridgeApiError(reply, 403, validation.code, validation.message);
+      }
+      const profile = context.runtimeProfiles.update(profileId, input);
       if (!profile) {
         return bridgeApiError(reply, 404, "runtime_profile_not_found", "Runtime profile not found.");
       }
-      return profile;
+      return redactRuntimeProfileForPolicy(profile, runtimeProfilePolicyForRequest(context, request.headers));
     } catch (error) {
       return bridgeApiError(reply, 400, "runtime_profile_invalid", error instanceof Error ? error.message : String(error));
     }
   });
 
   app.delete("/api/runtime-profiles/:profileId", async (request, reply) => {
+    const policy = runtimeProfilePolicyForRequest(context, request.headers);
+    if (!policy.canModify) {
+      return bridgeApiError(reply, 403, "runtime_profile_admin_required", "Runtime profile modification requires backend admin authorization.");
+    }
     const { profileId } = request.params as { profileId: string };
     const profile = context.runtimeProfiles.delete(profileId);
     if (!profile) {
       return bridgeApiError(reply, 404, "runtime_profile_not_found", "Runtime profile not found.");
     }
-    return profile;
+    return redactRuntimeProfileForPolicy(profile, policy);
   });
 
   app.post("/api/runtime-profiles/:profileId/test", async (request, reply) => {
+    const policy = runtimeProfilePolicyForRequest(context, request.headers);
+    if (!policy.canModify) {
+      return bridgeApiError(reply, 403, "runtime_profile_admin_required", "Runtime profile test requires backend admin authorization.");
+    }
     const { profileId } = request.params as { profileId: string };
     const profile = context.runtimeProfiles.getWithSecret(profileId);
     if (!profile) {
@@ -120,7 +159,9 @@ export async function createServer(context: AppContext, logger: Logger) {
       : { ok: true, skipped: true, codexArgs, env: redactRuntimeEnv(env) };
     return {
       ok: upstreamProbe.ok || codexProbe.ok,
-      profile: context.runtimeProfiles.getById(profileId),
+      profile: context.runtimeProfiles.getById(profileId)
+        ? redactRuntimeProfileForPolicy(context.runtimeProfiles.getById(profileId)!, policy)
+        : null,
       upstreamProbe,
       codexProbe
     };
@@ -131,10 +172,11 @@ export async function createServer(context: AppContext, logger: Logger) {
       return reply.badRequest("OpenIM callback payload must be an object");
     }
 
-    const event = parseAfterSendSingleMsgPayload(request.body, {
+    const parsedEvent = parseAfterSendSingleMsgPayload(request.body, {
       botUserId: context.config.OPENIM_BOT_USER_ID
     });
-    context.semanticEvents.insert(event);
+    const ingestion = semanticIngest.ingestOpenImEvent(parsedEvent);
+    const event = ingestion.event;
     logger.info(
       {
         eventId: event.id,
@@ -146,6 +188,9 @@ export async function createServer(context: AppContext, logger: Logger) {
       },
       "received OpenIM single-message callback"
     );
+    if (!ingestion.inserted) {
+      return openImCallbackOk({ ignored: true, reason: "duplicate_semantic_event", eventId: event.id });
+    }
 
     const decision = shouldCreateRuntimeJob(event, { botUserId: context.config.OPENIM_BOT_USER_ID });
     if (!decision.shouldRun) {
@@ -158,6 +203,7 @@ export async function createServer(context: AppContext, logger: Logger) {
         openimConversationId: event.openimConversationId,
         requestedCount: historyCommand.requestedCount
       });
+      conversationEvents.publishHistoryImportRequested(importRequest);
       await context.openimSender.sendBotText({
         operationId: importRequest.id,
         recvId: event.senderUserId,
@@ -174,10 +220,16 @@ export async function createServer(context: AppContext, logger: Logger) {
       });
     }
 
+    const project = validateRequestedProjectPath(context, context.config.CODEX_DEFAULT_PROJECT_PATH);
+    if (!project.ok) {
+      return bridgeApiError(reply, 400, "project_path_not_allowed", "CODEX_DEFAULT_PROJECT_PATH is outside the configured workspace allowlist.", {
+        diagnostics: project.diagnostics
+      });
+    }
     const session = context.sessions.getOrCreateActiveSession({
       openimConversationId: event.openimConversationId,
       openimDisplayUserId: event.senderUserId,
-      codexProjectPath: context.config.CODEX_DEFAULT_PROJECT_PATH,
+      codexProjectPath: project.normalizedPath!,
       displayName: summarizeUserText(event.text),
       lastSummary: summarizeUserText(event.text, 120)
     });
@@ -189,6 +241,9 @@ export async function createServer(context: AppContext, logger: Logger) {
       codexSessionIdBefore: session.codexSessionId
     });
 
+    conversationEvents.publishSessionChanged(event.openimConversationId, session, "active_session_created");
+    conversationEvents.publishJob("job_created", job);
+    conversationEvents.publishJob("job_queued", job);
     worker.enqueue(job, event);
     return openImCallbackOk({ ignored: false, jobId: job.id, sessionRecordId: session.id });
   });
@@ -198,10 +253,11 @@ export async function createServer(context: AppContext, logger: Logger) {
       return reply.badRequest("OpenIM callback payload must be an object");
     }
 
-    const event = parseAfterSendSingleMsgPayload(request.body, {
+    const parsedEvent = parseAfterSendSingleMsgPayload(request.body, {
       botUserId: context.config.OPENIM_BOT_USER_ID
     });
-    context.semanticEvents.insert(event);
+    const ingestion = semanticIngest.ingestOpenImEvent(parsedEvent);
+    const event = ingestion.event;
     logger.info(
       {
         eventId: event.id,
@@ -213,6 +269,9 @@ export async function createServer(context: AppContext, logger: Logger) {
       },
       "received OpenIM single-message callback"
     );
+    if (!ingestion.inserted) {
+      return openImCallbackOk({ ignored: true, reason: "duplicate_semantic_event", eventId: event.id });
+    }
 
     const decision = shouldCreateRuntimeJob(event, { botUserId: context.config.OPENIM_BOT_USER_ID });
     if (!decision.shouldRun) {
@@ -225,6 +284,7 @@ export async function createServer(context: AppContext, logger: Logger) {
         openimConversationId: event.openimConversationId,
         requestedCount: historyCommand.requestedCount
       });
+      conversationEvents.publishHistoryImportRequested(importRequest);
       await context.openimSender.sendBotText({
         operationId: importRequest.id,
         recvId: event.senderUserId,
@@ -241,10 +301,16 @@ export async function createServer(context: AppContext, logger: Logger) {
       });
     }
 
+    const project = validateRequestedProjectPath(context, context.config.CODEX_DEFAULT_PROJECT_PATH);
+    if (!project.ok) {
+      return bridgeApiError(reply, 400, "project_path_not_allowed", "CODEX_DEFAULT_PROJECT_PATH is outside the configured workspace allowlist.", {
+        diagnostics: project.diagnostics
+      });
+    }
     const session = context.sessions.getOrCreateActiveSession({
       openimConversationId: event.openimConversationId,
       openimDisplayUserId: event.senderUserId,
-      codexProjectPath: context.config.CODEX_DEFAULT_PROJECT_PATH,
+      codexProjectPath: project.normalizedPath!,
       displayName: summarizeUserText(event.text),
       lastSummary: summarizeUserText(event.text, 120)
     });
@@ -256,6 +322,9 @@ export async function createServer(context: AppContext, logger: Logger) {
       codexSessionIdBefore: session.codexSessionId
     });
 
+    conversationEvents.publishSessionChanged(event.openimConversationId, session, "active_session_created");
+    conversationEvents.publishJob("job_created", job);
+    conversationEvents.publishJob("job_queued", job);
     worker.enqueue(job, event);
     return openImCallbackOk({ ignored: false, jobId: job.id, sessionRecordId: session.id });
   });
@@ -321,6 +390,35 @@ export async function createServer(context: AppContext, logger: Logger) {
     const timer = setInterval(sendPendingEvents, 1000);
     request.raw.on("close", () => clearInterval(timer));
     sendPendingEvents();
+    return reply;
+  });
+
+  app.get("/api/conversations/:conversationId/events/stream", async (request, reply) => {
+    const { conversationId: rawConversationId } = request.params as { conversationId: string };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+      "access-control-allow-origin": "*"
+    });
+
+    const writeEvent = (event: ConversationStreamEvent) => {
+      reply.raw.write(`id: ${event.id}\n`);
+      reply.raw.write(`event: ${event.type}\n`);
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    const unsubscribe = conversationEvents.subscribe(conversationId, writeEvent);
+    const heartbeat = setInterval(() => {
+      reply.raw.write(": keep-alive\n\n");
+    }, 15000);
+    request.raw.on("close", () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+    reply.raw.write("event: connected\n");
+    reply.raw.write(`data: ${JSON.stringify({ conversationId })}\n\n`);
     return reply;
   });
 
@@ -404,18 +502,27 @@ export async function createServer(context: AppContext, logger: Logger) {
       return reply.badRequest("openimDisplayUserId is required when the conversation is unknown");
     }
 
+    const project = validateRequestedProjectPath(
+      context,
+      optionalString(body.codexProjectPath) ?? activeSession?.codexProjectPath ?? context.config.CODEX_DEFAULT_PROJECT_PATH
+    );
+    if (!project.ok) {
+      return bridgeApiError(reply, 400, "project_path_not_allowed", "Project path is outside the configured workspace allowlist.", {
+        diagnostics: project.diagnostics
+      });
+    }
+
     const session = context.sessions.rebindConversation({
       openimConversationId: conversationId,
       openimDisplayUserId,
-      codexProjectPath:
-        optionalString(body.codexProjectPath) ??
-        activeSession?.codexProjectPath ??
-        context.config.CODEX_DEFAULT_PROJECT_PATH,
+      codexProjectPath: project.normalizedPath!,
       codexSessionId: optionalString(body.codexSessionId),
       runtimeProfileId: optionalString(body.runtimeProfileId) ?? activeSession?.runtimeProfileId ?? null,
       displayName: summarizeUserText(optionalString(body.displayName) ?? "New session"),
       lastSummary: summarizeUserText(optionalString(body.displayName) ?? "Manual rebind", 120)
     });
+    conversationEvents.publishBindingChanged(conversationId, { activeSession: session, reason: "manual_rebind" });
+    conversationEvents.publishSessionChanged(conversationId, session, "manual_rebind");
 
     return reply.code(201).send({
       openimConversationId: conversationId,
@@ -441,6 +548,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     if (!archivedSession) {
       return reply.notFound("binding not found");
     }
+    conversationEvents.publishBindingChanged(conversationId, { archivedSession, activeSession: null, reason: "binding_archived" });
 
     return {
       openimConversationId: conversationId,
@@ -510,8 +618,65 @@ export async function createServer(context: AppContext, logger: Logger) {
       rolloutExists,
       resumeReady: Boolean(session.codexSessionId && homeExists && rolloutExists),
       lastJobId: latestJob?.id ?? null,
-      lastResumeFailure
+      lastResumeFailure,
+      projectPathValidation: validateRequestedProjectPath(context, session.codexProjectPath).diagnostics
     };
+  });
+
+  app.get("/api/conversations/:conversationId/semantic-events", async (request) => {
+    const { conversationId: rawConversationId } = request.params as { conversationId: string };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const query = request.query as { limit?: string; includeRuntime?: string };
+    return {
+      conversationID: conversationId,
+      events: context.semanticEvents.listByConversationId(conversationId, {
+        limit: parsePositiveInteger(query.limit, 200),
+        includeRuntime: parseBooleanQuery(query.includeRuntime)
+      })
+    };
+  });
+
+  app.get("/api/conversations/:conversationId/context/summary", async (request) => {
+    const { conversationId: rawConversationId } = request.params as { conversationId: string };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    return {
+      conversationID: conversationId,
+      summary: context.conversationSummaries.get(conversationId)
+    };
+  });
+
+  app.post("/api/conversations/:conversationId/context/summarize", async (request) => {
+    const { conversationId: rawConversationId } = request.params as { conversationId: string };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const recentLimit = parsePositiveInteger((request.query as { recentLimit?: string }).recentLimit, 30);
+    const events = context.semanticEvents.listByConversationId(conversationId, { limit: 1000 });
+    const olderEvents = events.slice(0, Math.max(0, events.length - recentLimit)).filter((event) => event.text);
+    const summary = context.conversationSummaries.upsert({
+      conversationID: conversationId,
+      summaryText: buildDeterministicSummaryText(olderEvents),
+      coveredEventIDs: olderEvents.map((event) => event.id),
+      coveredEventUntilTimestamp: olderEvents.at(-1)?.timestamp,
+      importantDecisions: extractImportantLines(olderEvents),
+      unresolvedTasks: extractUnresolvedTasks(olderEvents)
+    });
+    return { conversationID: conversationId, summary };
+  });
+
+  app.get("/api/conversations/:conversationId/context/preview", async (request) => {
+    const { conversationId: rawConversationId } = request.params as { conversationId: string };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const query = request.query as { includePrompt?: string; recentLimit?: string };
+    const builder = new ConversationContextBuilder({
+      semanticEvents: context.semanticEvents,
+      summaries: context.conversationSummaries,
+      sessions: context.sessions,
+      recentLimit: parsePositiveInteger(query.recentLimit, 30)
+    });
+    const conversationContext = builder.build(conversationId);
+    const promptPreview = parseBooleanQuery(query.includePrompt)
+      ? buildCodexPrompt({ context: conversationContext })
+      : undefined;
+    return buildContextPreview(conversationContext, promptPreview);
   });
 
   app.post("/api/conversations/:conversationId/openim-history-snapshots", async (request, reply) => {
@@ -528,7 +693,17 @@ export async function createServer(context: AppContext, logger: Logger) {
       source: optionalString(body.source) ?? "electron-sdk",
       messages: messages.map(toHistoryMessage)
     });
-    return reply.code(201).send(snapshot);
+    const importResult = semanticIngest.importHistorySnapshot({
+      conversationID: conversationId,
+      messages: snapshot.messages
+    });
+    conversationEvents.publish("history_import_requested", conversationId, { snapshot, status: "fulfilled" });
+    return reply.code(201).send({
+      ...importResult,
+      messageCount: snapshot.messageCount,
+      snapshotId: snapshot.id,
+      requestId: snapshot.requestId
+    });
   });
 
   app.post("/api/conversations/:conversationId/codex-sessions", async (request, reply) => {
@@ -542,15 +717,27 @@ export async function createServer(context: AppContext, logger: Logger) {
       return reply.badRequest("openimDisplayUserId is required when the conversation is unknown");
     }
 
+    const project = validateRequestedProjectPath(
+      context,
+      optionalString(body.codexProjectPath) ?? active?.codexProjectPath ?? context.config.CODEX_DEFAULT_PROJECT_PATH
+    );
+    if (!project.ok) {
+      return bridgeApiError(reply, 400, "project_path_not_allowed", "Project path is outside the configured workspace allowlist.", {
+        diagnostics: project.diagnostics
+      });
+    }
+
     const session = context.sessions.createAdditionalSession({
       openimConversationId: conversationId,
       openimDisplayUserId: displayUserId,
-      codexProjectPath: optionalString(body.codexProjectPath) ?? active?.codexProjectPath ?? context.config.CODEX_DEFAULT_PROJECT_PATH,
+      codexProjectPath: project.normalizedPath!,
       runtimeProfileId: optionalString(body.runtimeProfileId) ?? active?.runtimeProfileId ?? null,
       displayName: summarizeUserText(optionalString(body.displayName) ?? "New session"),
       lastSummary: summarizeUserText(optionalString(body.displayName) ?? "Manual new session", 120)
     });
     const activated = context.sessions.activateSession(conversationId, session.id);
+    conversationEvents.publishSessionChanged(conversationId, activated, "manual_new_session");
+    conversationEvents.publishBindingChanged(conversationId, { activeSession: activated, reason: "manual_new_session" });
     return reply.code(201).send(activated);
   });
 
@@ -575,7 +762,10 @@ export async function createServer(context: AppContext, logger: Logger) {
         session
       });
     }
-    return context.sessions.activateSession(conversationId, sessionRecordId);
+    const activated = context.sessions.activateSession(conversationId, sessionRecordId);
+    conversationEvents.publishSessionChanged(conversationId, activated, "manual_activate");
+    conversationEvents.publishBindingChanged(conversationId, { activeSession: activated, reason: "manual_activate" });
+    return activated;
   });
 
   app.patch("/api/conversations/:conversationId/codex-sessions/:sessionRecordId", async (request, reply) => {
@@ -593,7 +783,9 @@ export async function createServer(context: AppContext, logger: Logger) {
     if (!session || session.openimConversationId !== conversationId) {
       return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
     }
-    return context.sessions.updateDisplayName(sessionRecordId, displayName);
+    const updated = context.sessions.updateDisplayName(sessionRecordId, displayName);
+    conversationEvents.publishSessionChanged(conversationId, updated, "manual_rename");
+    return updated;
   });
 
   app.post("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/archive", async (request, reply) => {
@@ -612,6 +804,8 @@ export async function createServer(context: AppContext, logger: Logger) {
     if (!archived) {
       return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
     }
+    conversationEvents.publishSessionChanged(conversationId, archived, "manual_archive");
+    conversationEvents.publishBindingChanged(conversationId, { session: archived, reason: "manual_archive" });
     return archived;
   });
 
@@ -631,6 +825,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     if (!restored) {
       return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
     }
+    conversationEvents.publishSessionChanged(conversationId, restored, "manual_restore");
     return restored;
   });
 
@@ -650,6 +845,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     if (!deleted) {
       return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
     }
+    conversationEvents.publishSessionChanged(conversationId, deleted, "manual_delete");
     return deleted;
   });
 
@@ -663,6 +859,42 @@ function openImCallbackOk(data: Record<string, unknown>) {
     errMsg: "",
     data
   };
+}
+
+type HeaderBag = Record<string, string | string[] | undefined>;
+
+function buildBridgeMeta(context: AppContext, headers: HeaderBag) {
+  return {
+    ...BRIDGE_META,
+    runtimePolicy: runtimeProfilePolicyForRequest(context, headers),
+    projectPathPolicy: {
+      allowlist: parseProjectPathAllowlist(context.config.CODEX_WORKSPACE_ALLOWLIST, context.config.CODEX_DEFAULT_PROJECT_PATH)
+    }
+  };
+}
+
+function runtimeProfilePolicyForRequest(context: AppContext, headers: HeaderBag) {
+  return getRuntimeProfilePolicy({
+    environment: context.config.NODE_ENV,
+    adminTokenConfigured: Boolean(context.config.CODEX_RUNTIME_ADMIN_TOKEN),
+    isAdmin: isAdminRequest(context, headers)
+  });
+}
+
+function isAdminRequest(context: AppContext, headers: HeaderBag): boolean {
+  if (!context.config.CODEX_RUNTIME_ADMIN_TOKEN) {
+    return context.config.NODE_ENV !== "production";
+  }
+  const header = headers["x-codex-admin-token"];
+  const value = Array.isArray(header) ? header[0] : header;
+  return value === context.config.CODEX_RUNTIME_ADMIN_TOKEN;
+}
+
+function validateRequestedProjectPath(context: AppContext, projectPath: string) {
+  return validateProjectPath(
+    projectPath,
+    parseProjectPathAllowlist(context.config.CODEX_WORKSPACE_ALLOWLIST, context.config.CODEX_DEFAULT_PROJECT_PATH)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -704,11 +936,14 @@ function toHistoryMessage(value: unknown) {
     clientMsgID: optionalString(row.clientMsgID) ?? undefined,
     serverMsgID: optionalString(row.serverMsgID) ?? undefined,
     sendID: optionalString(row.sendID) ?? undefined,
+    recvID: optionalString(row.recvID) ?? undefined,
+    groupID: optionalString(row.groupID) ?? optionalString(row.groupId) ?? undefined,
     senderNickname: optionalString(row.senderNickname) ?? undefined,
     contentType: typeof row.contentType === "number" ? row.contentType : undefined,
     sendTime: typeof row.sendTime === "number" ? row.sendTime : undefined,
     text: optionalString(row.text) ?? undefined,
-    preview: optionalString(row.preview) ?? undefined
+    preview: optionalString(row.preview) ?? undefined,
+    ex: row.ex
   };
 }
 
@@ -745,6 +980,11 @@ function parseBooleanQuery(value: string | undefined, defaultValue = false): boo
     return defaultValue;
   }
   return value === "true" || value === "1";
+}
+
+function parsePositiveInteger(value: string | undefined, defaultValue: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 1000) : defaultValue;
 }
 
 function toRuntimeProfileInput(body: Record<string, unknown>, partial = false): RuntimeProfileInput {
@@ -947,6 +1187,34 @@ function summarizeUserText(value: string | null | undefined, maxLength = 40): st
     return null;
   }
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
+}
+
+function buildDeterministicSummaryText(events: SemanticEvent[]): string {
+  const lines = events
+    .filter((event) => event.role === "user" && event.text)
+    .slice(-10)
+    .map((event) => `- ${speakerName(event)}: ${redactSecretsInText(event.text!)}`);
+  return lines.length ? lines.join("\n") : "No older text messages summarized yet.";
+}
+
+function extractImportantLines(events: SemanticEvent[]): string[] {
+  return events
+    .filter((event) => event.role === "user" && event.text)
+    .map((event) => redactSecretsInText(event.text!))
+    .filter((text) => /\b(must|should|source of truth|do not|不要|禁止|必须|需要)\b/i.test(text))
+    .slice(-12);
+}
+
+function extractUnresolvedTasks(events: SemanticEvent[]): string[] {
+  return events
+    .filter((event) => event.role === "user" && event.text)
+    .map((event) => redactSecretsInText(event.text!))
+    .filter((text) => /\b(todo|fix|implement|add|verify|补充|新增|实现|验证|修复)\b/i.test(text))
+    .slice(-12);
+}
+
+function speakerName(event: SemanticEvent): string {
+  return event.actorDisplayName ?? event.actorID ?? event.senderUserId;
 }
 
 function normalizeOpenImConversationId(conversationId: string, botUserId: string): string {

@@ -2,11 +2,13 @@ import { loadEnv } from "./config/env.js";
 import { createLogger } from "./utils/logger.js";
 import { openDatabase } from "./storage/db.js";
 import { SemanticEventRepository } from "./core/semantic-event.repository.js";
+import { ConversationSummaryRepository } from "./core/conversation-summary.repository.js";
 import { SessionBindingRepository } from "./core/session-binding.repository.js";
 import { RuntimeJobRepository } from "./core/runtime-job.repository.js";
 import { RuntimeEventRepository } from "./core/runtime-event.repository.js";
 import { RuntimeProfileRepository } from "./core/runtime-profile.repository.js";
 import { OpenImHistoryRepository } from "./core/openim-history.repository.js";
+import { ConversationEventBus } from "./core/conversation-event-bus.js";
 import { SpawnCodexCliAdapter } from "./adapters/codex/codex-cli.adapter.js";
 import { OpenImAuthClient } from "./adapters/openim/openim-auth.client.js";
 import { OpenImMessageSender } from "./adapters/openim/openim-message.sender.js";
@@ -21,6 +23,7 @@ const context = {
   config,
   db,
   semanticEvents: new SemanticEventRepository(db),
+  conversationSummaries: new ConversationSummaryRepository(db),
   sessions: new SessionBindingRepository(db, {
     codexSessionHomeMode: config.CODEX_SESSION_HOME_MODE,
     codexSessionHomeRoot: config.CODEX_SESSION_HOME_ROOT,
@@ -31,6 +34,7 @@ const context = {
   runtimeEvents: new RuntimeEventRepository(db),
   runtimeProfiles: new RuntimeProfileRepository(db, config.BRIDGE_SECRET_KEY),
   openimHistory: new OpenImHistoryRepository(db),
+  conversationEvents: new ConversationEventBus(),
   codex: new SpawnCodexCliAdapter({
     codexBin: config.CODEX_BIN,
     timeoutMs: config.CODEX_EXEC_TIMEOUT_MS

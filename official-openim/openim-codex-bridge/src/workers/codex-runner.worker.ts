@@ -5,7 +5,9 @@ import type { RuntimeJob } from "../core/runtime-job.js";
 import type { SemanticEvent } from "../core/semantic-event.js";
 import { ensureCodexRuntimeHome } from "../core/codex-runtime-home.service.js";
 import { buildCodexPrompt } from "../core/prompt-builder.service.js";
+import { ConversationContextBuilder } from "../core/conversation-context.service.js";
 import { normalizeCodexJsonEvent } from "../adapters/codex/codex-output.parser.js";
+import { createId } from "../utils/ids.js";
 
 export class CodexRunnerWorker {
   private readonly chains = new Map<string, Promise<void>>();
@@ -36,7 +38,11 @@ export class CodexRunnerWorker {
     }
 
     if (job.status === "queued") {
-      return this.context.jobs.cancelQueued(jobId, { cancelMethod: "api" });
+      const cancelled = this.context.jobs.cancelQueued(jobId, { cancelMethod: "api" });
+      if (cancelled) {
+        this.context.conversationEvents?.publishJob("job_cancelled", cancelled);
+      }
+      return cancelled;
     }
 
     if (job.status === "running" || job.status === "cancelling") {
@@ -76,6 +82,8 @@ export class CodexRunnerWorker {
       codexSessionIdBefore: session.codexSessionId
     });
     if (retry) {
+      this.context.conversationEvents?.publishJob("job_created", retry);
+      this.context.conversationEvents?.publishJob("job_queued", retry);
       this.enqueue(retry, event);
     }
     return retry;
@@ -98,15 +106,20 @@ export class CodexRunnerWorker {
         errorText: "Codex session record not found",
         failureReason: "missing_session"
       });
+      const failed = this.context.jobs.getById(jobId);
+      if (failed) this.context.conversationEvents?.publishJob("job_failed", failed);
       return;
     }
 
+    const contextBuilder = new ConversationContextBuilder({
+      semanticEvents: this.context.semanticEvents,
+      summaries: this.context.conversationSummaries,
+      sessions: this.context.sessions,
+      recentLimit: this.context.config.CONTEXT_RECENT_EVENT_LIMIT
+    });
     const prompt = buildCodexPrompt({
-      openimConversationId: job.openimConversationId,
-      codexProjectPath: session.codexProjectPath,
-      codexSessionId: session.codexSessionId,
-      userText: job.inputText,
-      openimHistoryMessages: this.context.openimHistory.getLatestSnapshot(job.openimConversationId)?.messages
+      context: contextBuilder.build(job.openimConversationId, { currentEvent: event }),
+      currentEvent: event
     });
     const codexHomeDir = ensureCodexRuntimeHome(session, this.context.config);
     const runtimeProfile = session.runtimeProfileId
@@ -179,6 +192,8 @@ export class CodexRunnerWorker {
 
       this.runningJobs.set(jobId, handle);
       this.context.jobs.markRunning(jobId);
+      const runningJob = this.context.jobs.getById(jobId);
+      if (runningJob) this.context.conversationEvents?.publishJob("job_started", runningJob);
       this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, {
         type: "codex.process_spawned",
         pid: handle.pid
@@ -245,6 +260,8 @@ export class CodexRunnerWorker {
           cancelMethod: latestJob?.cancelMethod ?? "process",
           errorText: result.errorText ?? "Cancelled"
         });
+        const cancelled = this.context.jobs.getById(jobId);
+        if (cancelled) this.context.conversationEvents?.publishJob("job_cancelled", cancelled);
         await this.reply(event, jobId, session.id, session.codexSessionId, "Codex job was cancelled.");
         return;
       }
@@ -255,12 +272,16 @@ export class CodexRunnerWorker {
           errorText,
           failureReason: result.timedOut ? "timeout" : "codex_exit"
         });
+        const failed = this.context.jobs.getById(jobId);
+        if (failed) this.context.conversationEvents?.publishJob("job_failed", failed);
         await this.reply(event, jobId, session.id, session.codexSessionId, `Codex CLI failed: ${errorText}`).catch(
           (replyError: unknown) => {
             this.context.jobs.markFailed(jobId, {
               errorText: `OpenIM failure reply failed after Codex error: ${replyError instanceof Error ? replyError.message : String(replyError)}`,
               failureReason: "openim_send_failed"
             });
+            const failedReply = this.context.jobs.getById(jobId);
+            if (failedReply) this.context.conversationEvents?.publishJob("job_failed", failedReply);
             this.logger.error({ jobId, err: replyError }, "failed to send Codex failure reply");
           }
         );
@@ -269,6 +290,11 @@ export class CodexRunnerWorker {
 
       if (result.sessionId) {
         this.context.sessions.updateCodexSessionId(session.id, result.sessionId);
+        this.context.conversationEvents?.publishSessionChanged(
+          job.openimConversationId,
+          this.context.sessions.getById(session.id),
+          "codex_session_id_updated"
+        );
       }
       this.context.sessions.updateAutoSummary(session.id, {
         displayName: job.inputText,
@@ -278,12 +304,16 @@ export class CodexRunnerWorker {
         outputText: result.outputText,
         codexSessionIdAfter: result.sessionId ?? session.codexSessionId
       });
+      const succeeded = this.context.jobs.getById(jobId);
+      if (succeeded) this.context.conversationEvents?.publishJob("job_succeeded", succeeded);
       await this.reply(event, jobId, session.id, result.sessionId ?? session.codexSessionId, result.outputText).catch(
         (replyError: unknown) => {
           this.context.jobs.markFailed(jobId, {
             errorText: `OpenIM success reply failed after Codex completed: ${replyError instanceof Error ? replyError.message : String(replyError)}`,
             failureReason: "openim_send_failed"
           });
+          const failedReply = this.context.jobs.getById(jobId);
+          if (failedReply) this.context.conversationEvents?.publishJob("job_failed", failedReply);
           throw replyError;
         }
       );
@@ -291,6 +321,8 @@ export class CodexRunnerWorker {
       this.runningJobs.delete(jobId);
       if (this.context.jobs.getById(jobId)?.status === "cancelling") {
         this.context.jobs.markCancelled(jobId, { cancelMethod: "api", errorText: "Cancelled" });
+        const cancelled = this.context.jobs.getById(jobId);
+        if (cancelled) this.context.conversationEvents?.publishJob("job_cancelled", cancelled);
         await this.reply(event, jobId, session.id, session.codexSessionId, "Codex job was cancelled.").catch(
           (replyError: unknown) => {
             this.logger.error({ jobId, err: replyError }, "failed to send cancellation reply");
@@ -301,6 +333,8 @@ export class CodexRunnerWorker {
 
       const errorText = error instanceof Error ? error.message : String(error);
       this.context.jobs.markFailed(jobId, { errorText, failureReason: "bridge_error" });
+      const failed = this.context.jobs.getById(jobId);
+      if (failed) this.context.conversationEvents?.publishJob("job_failed", failed);
       await this.reply(event, jobId, session.id, session.codexSessionId, `Bridge runtime failed: ${errorText}`).catch(
         (replyError: unknown) => {
           this.logger.error({ jobId, err: replyError }, "failed to send failure reply");
@@ -327,6 +361,35 @@ export class CodexRunnerWorker {
         text,
         metadata: { jobId, sessionRecordId, codexSessionId }
       });
+      this.context.semanticEvents.upsert({
+        id: createId("evt"),
+        conversationID: event.openimConversationId,
+        conversationType: event.conversationType ?? (event.groupId ? "group" : "single"),
+        source: "bridge_runtime",
+        sourceMessageID: `bridge_reply:${jobId}`,
+        actorID: "codex_bot",
+        actorType: "codex_bot",
+        actorDisplayName: "Codex",
+        role: "assistant",
+        openimMessageId: null,
+        openimClientMsgId: null,
+        openimConversationId: event.openimConversationId,
+        senderUserId: this.context.config.OPENIM_BOT_USER_ID,
+        receiverUserId: event.senderUserId,
+        groupId: event.groupId,
+        sendID: this.context.config.OPENIM_BOT_USER_ID,
+        recvID: event.senderUserId,
+        groupID: event.groupId,
+        eventType: "agent.reply",
+        contentType: 101,
+        text,
+        timestamp: Date.now(),
+        metadata: { jobId, sessionRecordId, codexSessionId },
+        dedupKey: `bridge_reply:${jobId}`,
+        ex: { agent: { generated_by: "codex" } },
+        rawPayload: { jobId, sessionRecordId, codexSessionId },
+        createdAt: Date.now()
+      });
       this.recordRuntimeEvent(jobId, sessionRecordId, event.openimConversationId, {
         type: "openim.reply_completed"
       });
@@ -347,7 +410,7 @@ export class CodexRunnerWorker {
   ): void {
     const normalized = normalizeCodexJsonEvent(codexEvent);
     const createdAt = typeof codexEvent.createdAt === "number" ? codexEvent.createdAt : undefined;
-    this.context.runtimeEvents.recordCodexJsonEvent({
+    const event = this.context.runtimeEvents.recordCodexJsonEvent({
       jobId,
       sessionRecordId,
       openimConversationId,
@@ -357,6 +420,7 @@ export class CodexRunnerWorker {
       rawEvent: normalized.rawEvent,
       createdAt
     });
+    this.context.conversationEvents?.publishRuntimeEvent(event);
   }
 
   private runNewTask(input: CodexRunInput): CodexRunHandle {

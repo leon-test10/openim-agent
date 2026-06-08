@@ -17,9 +17,15 @@ const EnvSchema = z.object({
   CODEX_SESSION_HOME_SEED_MODE: z.enum(["copy-auth-only", "copy-auth-and-config", "none"]).default("copy-auth-only"),
   CODEX_BASE_HOME: z.string().optional().default(""),
   CODEX_SANDBOX_MODE: z.string().optional().default(""),
+  CODEX_WORKSPACE_ALLOWLIST: z.string().optional().default(""),
+  CODEX_RUNTIME_ADMIN_TOKEN: z.string().optional().default(""),
+  CONTEXT_RECENT_EVENT_LIMIT: z.coerce.number().int().positive().default(30),
+  CONTEXT_AUTO_SUMMARY_ENABLED: z.coerce.boolean().default(false),
+  CONTEXT_SUMMARY_EVENT_THRESHOLD: z.coerce.number().int().positive().default(120),
   BRIDGE_SECRET_KEY: z.string().optional().default(""),
   DATABASE_URL: z.string().default("file:./data/openim-codex-bridge.sqlite"),
-  LOG_LEVEL: z.string().default("info")
+  LOG_LEVEL: z.string().default("info"),
+  NODE_ENV: z.string().optional().default("development")
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;

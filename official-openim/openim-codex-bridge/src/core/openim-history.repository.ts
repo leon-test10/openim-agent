@@ -24,11 +24,14 @@ export interface OpenImHistoryMessage {
   clientMsgID?: string;
   serverMsgID?: string;
   sendID?: string;
+  recvID?: string;
+  groupID?: string;
   senderNickname?: string;
   contentType?: number;
   sendTime?: number;
   text?: string;
   preview?: string;
+  ex?: unknown;
 }
 
 interface ImportRequestRow {
@@ -163,11 +166,14 @@ function sanitizeMessages(messages: OpenImHistoryMessage[]): OpenImHistoryMessag
     clientMsgID: normalizeString(message.clientMsgID),
     serverMsgID: normalizeString(message.serverMsgID),
     sendID: normalizeString(message.sendID),
+    recvID: normalizeString(message.recvID),
+    groupID: normalizeString(message.groupID),
     senderNickname: normalizeString(message.senderNickname),
     contentType: typeof message.contentType === "number" ? message.contentType : undefined,
     sendTime: typeof message.sendTime === "number" ? message.sendTime : undefined,
     text: normalizeString(message.text),
-    preview: normalizeString(message.preview)
+    preview: normalizeString(message.preview),
+    ex: message.ex
   }));
 }
 

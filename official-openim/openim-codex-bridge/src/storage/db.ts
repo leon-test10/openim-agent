@@ -39,6 +39,24 @@ function migrate(db: BridgeDatabase): void {
       created_at INTEGER NOT NULL
     );
 
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_semantic_events_openim_message
+      ON semantic_events(openim_conversation_id, openim_message_id)
+      WHERE openim_message_id IS NOT NULL;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_semantic_events_openim_client
+      ON semantic_events(openim_conversation_id, openim_client_msg_id)
+      WHERE openim_client_msg_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS conversation_summaries (
+      openim_conversation_id TEXT PRIMARY KEY,
+      summary_text TEXT NOT NULL,
+      covered_event_ids_json TEXT NOT NULL,
+      covered_event_until_timestamp INTEGER,
+      important_decisions_json TEXT NOT NULL,
+      unresolved_tasks_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS openim_conversations (
       id TEXT PRIMARY KEY,
       openim_conversation_id TEXT NOT NULL UNIQUE,
@@ -183,6 +201,29 @@ function migrate(db: BridgeDatabase): void {
   ensureColumn(db, "codex_runtime_profiles", "wire_api", "TEXT");
   ensureColumn(db, "codex_runtime_profiles", "auth_env_key", "TEXT");
   ensureColumn(db, "codex_runtime_profiles", "codex_home_override", "TEXT");
+  ensureColumn(db, "semantic_events", "conversation_type", "TEXT");
+  ensureColumn(db, "semantic_events", "source", "TEXT");
+  ensureColumn(db, "semantic_events", "source_message_id", "TEXT");
+  ensureColumn(db, "semantic_events", "actor_id", "TEXT");
+  ensureColumn(db, "semantic_events", "actor_type", "TEXT");
+  ensureColumn(db, "semantic_events", "actor_display_name", "TEXT");
+  ensureColumn(db, "semantic_events", "role", "TEXT");
+  ensureColumn(db, "semantic_events", "timestamp", "INTEGER");
+  ensureColumn(db, "semantic_events", "metadata_json", "TEXT");
+  ensureColumn(db, "semantic_events", "dedup_key", "TEXT");
+  ensureColumn(db, "semantic_events", "updated_at", "INTEGER");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_semantic_events_source_message
+      ON semantic_events(openim_conversation_id, source_message_id)
+      WHERE source_message_id IS NOT NULL;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_semantic_events_dedup_key
+      ON semantic_events(openim_conversation_id, dedup_key)
+      WHERE dedup_key IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_semantic_events_conversation_timestamp
+      ON semantic_events(openim_conversation_id, timestamp, created_at);
+  `);
 }
 
 function ensureColumn(db: BridgeDatabase, tableName: string, columnName: string, columnType: string): void {
