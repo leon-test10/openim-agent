@@ -1,23 +1,29 @@
 import type { Logger } from "pino";
 import type { AppContext } from "../app-context.js";
-import type { CodexResumeInput, CodexRunHandle, CodexRunInput } from "../adapters/codex/codex-types.js";
 import type { RuntimeJob } from "../core/runtime-job.js";
 import type { SemanticEvent } from "../core/semantic-event.js";
 import { ensureCodexRuntimeHome } from "../core/codex-runtime-home.service.js";
 import { buildCodexPrompt } from "../core/prompt-builder.service.js";
 import { ConversationContextBuilder } from "../core/conversation-context.service.js";
 import { decideContextSupplement } from "../core/context-supplement-policy.js";
-import { normalizeCodexJsonEvent } from "../adapters/codex/codex-output.parser.js";
+import { normalizeRuntimeEvent } from "../runtime/runtime-event-mapper.js";
+import type { AgentRunner, RuntimeKind, RuntimeRunHandle } from "../runtime/runner.js";
 import { createId } from "../utils/ids.js";
 
 export class CodexRunnerWorker {
   private readonly chains = new Map<string, Promise<void>>();
-  private readonly runningJobs = new Map<string, CodexRunHandle>();
+  private readonly runningJobs = new Map<string, RuntimeRunHandle>();
+  private readonly runner: AgentRunner;
 
   constructor(
     private readonly context: AppContext,
     private readonly logger: Logger
-  ) {}
+  ) {
+    if (!context.runner) {
+      throw new Error("Agent runner is not configured.");
+    }
+    this.runner = context.runner;
+  }
 
   enqueue(job: RuntimeJob, event: SemanticEvent): void {
     const previous = this.chains.get(job.openimConversationId) ?? Promise.resolve();
@@ -148,7 +154,7 @@ export class CodexRunnerWorker {
     const apiKeyEnvName = runtimeProfile?.authEnvKey ?? (providerId ? `CODEX_RUNTIME_PROFILE_${providerId.toUpperCase()}_API_KEY` : undefined);
     const runtimeOptions = {
       model: runtimeProfile?.model ?? (this.context.config.CODEX_DEFAULT_MODEL || undefined),
-      codexHomeDir: runtimeProfile?.codexHomeOverride ?? codexHomeDir,
+      runtimeHomeDir: runtimeProfile?.codexHomeOverride ?? codexHomeDir,
       sandboxMode: runtimeProfile?.sandboxMode ?? session.sandboxMode ?? undefined,
       approvalPolicy: runtimeProfile?.approvalPolicy ?? undefined,
       codexProfile: runtimeProfile?.codexProfile ?? undefined,
@@ -202,15 +208,24 @@ export class CodexRunnerWorker {
             type: "codex.resume.started",
             sessionId: session.codexSessionId
           }),
-          this.resumeTask({
+          this.runner.run({
+            jobId,
+            sessionRecordId: session.id,
+            openimConversationId: job.openimConversationId,
+            inputText: job.inputText,
             projectPath: session.codexProjectPath,
-            sessionId: session.codexSessionId,
+            externalSessionId: session.codexSessionId,
             prompt,
             ...runtimeOptions,
             onEvent: recordCodexEvent
           }))
-        : this.runNewTask({
+        : this.runner.run({
+            jobId,
+            sessionRecordId: session.id,
+            openimConversationId: job.openimConversationId,
+            inputText: job.inputText,
             projectPath: session.codexProjectPath,
+            externalSessionId: null,
             prompt,
             ...runtimeOptions,
             onEvent: recordCodexEvent
@@ -257,8 +272,13 @@ export class CodexRunnerWorker {
           { jobId, sessionRecordId: session.id, codexSessionId: session.codexSessionId, codexHomeDir },
           "Codex resume failed because the isolated home does not contain the old rollout; starting a new task"
         );
-        const fallbackHandle = this.runNewTask({
+        const fallbackHandle = this.runner.run({
+          jobId,
+          sessionRecordId: session.id,
+          openimConversationId: job.openimConversationId,
+          inputText: job.inputText,
           projectPath: session.codexProjectPath,
+          externalSessionId: null,
           prompt,
           ...runtimeOptions,
           onEvent: recordCodexEvent
@@ -314,8 +334,8 @@ export class CodexRunnerWorker {
         return;
       }
 
-      if (result.sessionId) {
-        this.context.sessions.updateCodexSessionId(session.id, result.sessionId);
+      if (result.externalSessionId) {
+        this.context.sessions.updateCodexSessionId(session.id, result.externalSessionId);
         this.context.conversationEvents?.publishSessionChanged(
           job.openimConversationId,
           this.context.sessions.getById(session.id),
@@ -328,11 +348,11 @@ export class CodexRunnerWorker {
       });
       this.context.jobs.markSucceeded(jobId, {
         outputText: result.outputText,
-        codexSessionIdAfter: result.sessionId ?? session.codexSessionId
+        codexSessionIdAfter: result.externalSessionId ?? session.codexSessionId
       });
       const succeeded = this.context.jobs.getById(jobId);
       if (succeeded) this.context.conversationEvents?.publishJob("job_succeeded", succeeded);
-      await this.reply(event, jobId, session.id, result.sessionId ?? session.codexSessionId, result.outputText).catch(
+      await this.reply(event, jobId, session.id, result.externalSessionId ?? session.codexSessionId, result.outputText).catch(
         (replyError: unknown) => {
           this.context.jobs.markFailed(jobId, {
             errorText: `OpenIM success reply failed after Codex completed: ${replyError instanceof Error ? replyError.message : String(replyError)}`,
@@ -432,9 +452,10 @@ export class CodexRunnerWorker {
     jobId: string,
     sessionRecordId: string,
     openimConversationId: string,
-    codexEvent: Record<string, unknown>
+    codexEvent: Record<string, unknown>,
+    runtimeKind: RuntimeKind = this.runner.kind
   ): void {
-    const normalized = normalizeCodexJsonEvent(codexEvent);
+    const normalized = normalizeRuntimeEvent(runtimeKind, codexEvent);
     const createdAt = typeof codexEvent.createdAt === "number" ? codexEvent.createdAt : undefined;
     const event = this.context.runtimeEvents.recordCodexJsonEvent({
       jobId,
@@ -447,28 +468,6 @@ export class CodexRunnerWorker {
       createdAt
     });
     this.context.conversationEvents?.publishRuntimeEvent(event);
-  }
-
-  private runNewTask(input: CodexRunInput): CodexRunHandle {
-    if (this.context.codex.runNewTaskCancellable) {
-      return this.context.codex.runNewTaskCancellable(input);
-    }
-    return {
-      pid: null,
-      promise: this.context.codex.runNewTask(input),
-      cancel: async () => undefined
-    };
-  }
-
-  private resumeTask(input: CodexResumeInput): CodexRunHandle {
-    if (this.context.codex.resumeTaskCancellable) {
-      return this.context.codex.resumeTaskCancellable(input);
-    }
-    return {
-      pid: null,
-      promise: this.context.codex.resumeTask(input),
-      cancel: async () => undefined
-    };
   }
 }
 

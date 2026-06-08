@@ -2,15 +2,13 @@ import sensible from "@fastify/sensible";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { existsSync, readdirSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { spawn } from "node:child_process";
 import type { Logger } from "pino";
 import type { AppContext } from "./app-context.js";
 import { shouldCreateRuntimeJob } from "./core/agent-decision.service.js";
 import { parseAfterSendSingleMsgPayload } from "./adapters/openim/openim-message.parser.js";
-import { buildCodexRuntimeArgs, buildCodexRuntimeEnv } from "./adapters/codex/codex-cli.adapter.js";
+import { buildCodexRuntimeArgs, buildCodexRuntimeEnv, runCodexRuntimeProbe } from "./adapters/codex/codex-cli.adapter.js";
+import { CodexCliRunner } from "./runtime/codex-cli.runner.js";
 import { CodexRunnerWorker } from "./workers/codex-runner.worker.js";
 import { deriveConversationState, toRuntimeJobView } from "./core/conversation-status.js";
 import type { RuntimeProfileInput } from "./core/runtime-profile.js";
@@ -56,6 +54,7 @@ export async function createServer(context: AppContext, logger: Logger) {
   const semanticIngest = new SemanticEventIngestService(context.semanticEvents, {
     botUserId: context.config.OPENIM_BOT_USER_ID
   });
+  context.runner ??= createLegacyCodexRunner(context);
   const worker = new CodexRunnerWorker(context, logger);
 
   await app.register(cors, {
@@ -150,7 +149,7 @@ export async function createServer(context: AppContext, logger: Logger) {
       ? await runUpstreamProbe(profile)
       : { ok: false, skipped: true, errorText: "upstream probe disabled" };
     const codexProbe = shouldRunCodexProbe
-      ? await runCodexProbe({
+      ? await runCodexRuntimeProbe({
           codexBin: context.config.CODEX_BIN,
           args: codexArgs,
           env,
@@ -1097,67 +1096,6 @@ async function runUpstreamProbe(profile: { baseUrl: string | null; model: string
   }
 }
 
-async function runCodexProbe(input: {
-  codexBin: string;
-  args: string[];
-  env: NodeJS.ProcessEnv;
-  codexHomeDir?: string;
-  timeoutMs: number;
-}) {
-  const tempDir = await mkdtemp(join(tmpdir(), "openim-codex-probe-"));
-  await writeFile(join(tempDir, "README.md"), "Codex runtime probe workspace.\n");
-  const args = [
-    "exec",
-    "--ephemeral",
-    "--json",
-    "--skip-git-repo-check",
-    "--cd",
-    tempDir,
-    ...input.args,
-    "-"
-  ];
-  return new Promise<Record<string, unknown>>((resolve) => {
-    const child = spawn(input.codexBin, args, {
-      env: { ...process.env, ...input.env, CODEX_HOME: input.codexHomeDir ?? input.env.CODEX_HOME },
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-      shell: process.platform === "win32"
-    });
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGINT");
-    }, input.timeoutMs);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      void rm(tempDir, { recursive: true, force: true });
-      resolve({ ok: false, skipped: false, codexArgs: input.args, env: redactRuntimeEnv(input.env), errorText: redactSecretsInText(error.message) });
-    });
-    child.on("close", (exitCode) => {
-      clearTimeout(timer);
-      void rm(tempDir, { recursive: true, force: true });
-      resolve({
-        ok: exitCode === 0,
-        skipped: false,
-        codexArgs: input.args,
-        env: redactRuntimeEnv(input.env),
-        exitCode,
-        outputPreview: redactSecretsInText(stdout).slice(-1000),
-        errorText: stderr.trim() ? redactSecretsInText(stderr).slice(-1000) : undefined
-      });
-    });
-    child.stdin.end("Return exactly: OPENIM_CODEX_BRIDGE_OK.");
-  });
-}
-
 function sanitizeProviderId(value: string): string {
   return value.replace(/[^A-Za-z0-9_]/g, "_");
 }
@@ -1173,6 +1111,13 @@ function redactRuntimeEnv(env: NodeJS.ProcessEnv): Record<string, string> {
     redacted[key] = key.toLowerCase().includes("key") || key.toLowerCase().includes("token") ? "****" : value;
   }
   return redacted;
+}
+
+function createLegacyCodexRunner(context: AppContext) {
+  if (!context.codex) {
+    throw new Error("Agent runner is not configured.");
+  }
+  return new CodexCliRunner(context.codex);
 }
 
 function bridgeApiError(

@@ -10,6 +10,7 @@ import { RuntimeProfileRepository } from "./core/runtime-profile.repository.js";
 import { OpenImHistoryRepository } from "./core/openim-history.repository.js";
 import { ConversationEventBus } from "./core/conversation-event-bus.js";
 import { SpawnCodexCliAdapter } from "./adapters/codex/codex-cli.adapter.js";
+import { CodexCliRunner } from "./runtime/codex-cli.runner.js";
 import { OpenImAuthClient } from "./adapters/openim/openim-auth.client.js";
 import { OpenImMessageSender } from "./adapters/openim/openim-message.sender.js";
 import { createServer } from "./server.js";
@@ -18,6 +19,10 @@ const config = loadEnv();
 const logger = createLogger(config.LOG_LEVEL);
 const db = openDatabase(config.DATABASE_URL);
 const authClient = new OpenImAuthClient(config);
+const codexAdapter = new SpawnCodexCliAdapter({
+  codexBin: config.CODEX_BIN,
+  timeoutMs: config.CODEX_EXEC_TIMEOUT_MS
+});
 
 const context = {
   config,
@@ -35,10 +40,8 @@ const context = {
   runtimeProfiles: new RuntimeProfileRepository(db, config.BRIDGE_SECRET_KEY),
   openimHistory: new OpenImHistoryRepository(db),
   conversationEvents: new ConversationEventBus(),
-  codex: new SpawnCodexCliAdapter({
-    codexBin: config.CODEX_BIN,
-    timeoutMs: config.CODEX_EXEC_TIMEOUT_MS
-  }),
+  runner: new CodexCliRunner(codexAdapter),
+  codex: codexAdapter,
   openimSender: new OpenImMessageSender(config, authClient)
 };
 

@@ -10,6 +10,7 @@ import { OpenImHistoryRepository } from "./core/openim-history.repository.js";
 import { ConversationEventBus } from "./core/conversation-event-bus.js";
 import type { CodexCliAdapter } from "./adapters/codex/codex-types.js";
 import type { OpenImMessageSender } from "./adapters/openim/openim-message.sender.js";
+import type { AgentRunner } from "./runtime/runner.js";
 
 export interface AppContext {
   config: AppConfig;
@@ -22,6 +23,7 @@ export interface AppContext {
   runtimeProfiles: RuntimeProfileRepository;
   openimHistory: OpenImHistoryRepository;
   conversationEvents?: ConversationEventBus;
-  codex: CodexCliAdapter;
+  runner?: AgentRunner;
+  codex?: CodexCliAdapter;
   openimSender: OpenImMessageSender;
 }

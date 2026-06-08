@@ -1,4 +1,7 @@
 import { execFile, spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseCodexJsonLine, parseCodexJsonlOutput } from "./codex-output.parser.js";
 import type { CodexCliAdapter, CodexResumeInput, CodexRunHandle, CodexRunInput, CodexRunResult } from "./codex-types.js";
 
@@ -206,8 +209,91 @@ export function buildCodexRuntimeEnv(
   return env;
 }
 
+export async function runCodexRuntimeProbe(input: {
+  codexBin: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  codexHomeDir?: string;
+  timeoutMs: number;
+}): Promise<Record<string, unknown>> {
+  const tempDir = await mkdtemp(join(tmpdir(), "openim-codex-probe-"));
+  await writeFile(join(tempDir, "README.md"), "Codex runtime probe workspace.\n");
+  const args = [
+    "exec",
+    "--ephemeral",
+    "--json",
+    "--skip-git-repo-check",
+    "--cd",
+    tempDir,
+    ...input.args,
+    "-"
+  ];
+  return new Promise<Record<string, unknown>>((resolve) => {
+    const child = spawn(input.codexBin, args, {
+      env: { ...process.env, ...input.env, CODEX_HOME: input.codexHomeDir ?? input.env.CODEX_HOME },
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+      shell: process.platform === "win32"
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGINT");
+    }, input.timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      void rm(tempDir, { recursive: true, force: true });
+      resolve({
+        ok: false,
+        skipped: false,
+        codexArgs: input.args,
+        env: redactRuntimeEnv(input.env),
+        errorText: redactSecrets(error.message)
+      });
+    });
+    child.on("close", (exitCode) => {
+      clearTimeout(timer);
+      void rm(tempDir, { recursive: true, force: true });
+      resolve({
+        ok: exitCode === 0,
+        skipped: false,
+        codexArgs: input.args,
+        env: redactRuntimeEnv(input.env),
+        exitCode,
+        outputPreview: redactSecrets(stdout).slice(-1000),
+        errorText: stderr.trim() ? redactSecrets(stderr).slice(-1000) : undefined
+      });
+    });
+    child.stdin.end("Return exactly: OPENIM_CODEX_BRIDGE_OK.");
+  });
+}
+
 function tomlString(value: string): string {
   return JSON.stringify(value);
+}
+
+function redactSecrets(value: string): string {
+  return value
+    .replace(/sk-[A-Za-z0-9_-]+/g, "sk-****")
+    .replace(/([A-Za-z0-9_]*token[A-Za-z0-9_]*\s*[:=]\s*)\S+/gi, "$1****")
+    .replace(/([A-Za-z0-9_]*key[A-Za-z0-9_]*\s*[:=]\s*)\S+/gi, "$1****");
+}
+
+function redactRuntimeEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).map(([key, value]) => [
+      key,
+      key.toLowerCase().includes("key") || key.toLowerCase().includes("token") ? "****" : String(value ?? "")
+    ])
+  );
 }
 
 function killProcessTree(pid: number | undefined): Promise<void> {

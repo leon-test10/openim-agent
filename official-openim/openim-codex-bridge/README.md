@@ -201,6 +201,22 @@ Semantic events track delivery metadata (`deliveredJobId`, `deliveredSessionReco
 redelivered on every normal resume. Manual summaries are deterministic bridge diagnostics and
 supplements; they are not a replacement for Codex CLI's own compaction.
 
+## Phase 4A/4B Status
+
+Phase 4A keeps Codex CLI as the first supported runtime and validates the existing vertical path:
+OpenIM webhook ingestion, semantic event persistence, runtime job queueing, Codex execution,
+runtime event recording, and OpenIM reply writing. The current baseline notes are tracked in
+`../docs/phase4a-codex-cli-baseline.md`.
+
+Phase 4B introduces a thin runtime runner boundary without changing legacy APIs or database names.
+`CodexRunnerWorker` still owns job lifecycle, cancellation, session updates, and OpenIM replies, but
+runtime execution is delegated through `AgentRunner`. The production implementation is
+`CodexCliRunner`, which wraps the existing `SpawnCodexCliAdapter`. Boundary details are tracked in
+`../docs/runtime-runner-boundary.md`.
+
+Later runtime API naming, OpenAI-compatible runtimes, OpenHands, and Electron Runtime UI migration
+remain out of scope for Phase 4A/4B.
+
 ## Session Model
 
 The bridge supports one OpenIM conversation with multiple Codex session records. Only one record is active at a time.
