@@ -22,6 +22,11 @@ interface SemanticEventRow {
   timestamp: number | null;
   metadata_json: string | null;
   dedup_key: string | null;
+  delivered_job_id: string | null;
+  delivered_session_record_id: string | null;
+  delivered_codex_session_id: string | null;
+  delivered_at: number | null;
+  delivery_reason: string | null;
   ex_json: string | null;
   raw_payload_json: string;
   created_at: number;
@@ -44,13 +49,17 @@ export class SemanticEventRepository {
           sender_user_id, receiver_user_id, group_id, event_type, content_type,
           text, ex_json, raw_payload_json, created_at, conversation_type, source,
           source_message_id, actor_id, actor_type, actor_display_name, role,
-          timestamp, metadata_json, dedup_key, updated_at
+          timestamp, metadata_json, dedup_key, delivered_job_id,
+          delivered_session_record_id, delivered_codex_session_id,
+          delivered_at, delivery_reason, updated_at
         ) VALUES (
           @id, @openimMessageId, @openimClientMsgId, @openimConversationId,
           @senderUserId, @receiverUserId, @groupId, @eventType, @contentType,
           @text, @exJson, @rawPayloadJson, @createdAt, @conversationType, @source,
           @sourceMessageID, @actorID, @actorType, @actorDisplayName, @role,
-          @timestamp, @metadataJson, @dedupKey, @updatedAt
+          @timestamp, @metadataJson, @dedupKey, @deliveredJobId,
+          @deliveredSessionRecordId, @deliveredCodexSessionId,
+          @deliveredAt, @deliveryReason, @updatedAt
         )
       `
       )
@@ -127,6 +136,59 @@ export class SemanticEventRepository {
     return rows.map(mapSemanticEventRow);
   }
 
+  listLatestByConversationId(openimConversationId: string, options: { limit?: number; includeRuntime?: boolean } = {}): SemanticEvent[] {
+    const limit = Math.max(1, Math.min(options.limit ?? 200, 1000));
+    const runtimeFilter = options.includeRuntime ? "" : "AND COALESCE(role, '') != 'runtime'";
+    const rows = this.db
+      .prepare(
+        `
+        SELECT * FROM (
+          SELECT * FROM semantic_events
+          WHERE openim_conversation_id = ? ${runtimeFilter}
+          ORDER BY COALESCE(timestamp, created_at) DESC, created_at DESC
+          LIMIT ?
+        ) ORDER BY COALESCE(timestamp, created_at) ASC, created_at ASC
+      `
+      )
+      .all(openimConversationId, limit) as SemanticEventRow[];
+    return rows.map(mapSemanticEventRow);
+  }
+
+  markDelivered(
+    eventIds: string[],
+    input: {
+      jobId: string;
+      sessionRecordId: string;
+      codexSessionId: string | null;
+      reason: string;
+      deliveredAt?: number;
+    }
+  ): void {
+    const ids = [...new Set(eventIds.filter(Boolean))];
+    if (!ids.length) {
+      return;
+    }
+    const deliveredAt = input.deliveredAt ?? Date.now();
+    const transaction = this.db.transaction(() => {
+      const statement = this.db.prepare(
+        `
+        UPDATE semantic_events
+        SET delivered_job_id = ?,
+            delivered_session_record_id = ?,
+            delivered_codex_session_id = ?,
+            delivered_at = ?,
+            delivery_reason = ?,
+            updated_at = ?
+        WHERE id = ?
+      `
+      );
+      for (const id of ids) {
+        statement.run(input.jobId, input.sessionRecordId, input.codexSessionId, deliveredAt, input.reason, deliveredAt, id);
+      }
+    });
+    transaction();
+  }
+
   listRecentPromptEvents(openimConversationId: string, limit: number): SemanticEvent[] {
     const rows = this.db
       .prepare(
@@ -142,6 +204,24 @@ export class SemanticEventRepository {
       `
       )
       .all(openimConversationId, Math.max(1, Math.min(limit, 200))) as SemanticEventRow[];
+    return rows.map(mapSemanticEventRow);
+  }
+
+  listUndeliveredHistoryPromptEvents(openimConversationId: string, sessionRecordId: string, limit = 200): SemanticEvent[] {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT * FROM semantic_events
+        WHERE openim_conversation_id = ?
+          AND source = 'openim_history_snapshot'
+          AND text IS NOT NULL
+          AND COALESCE(role, '') IN ('user', 'assistant')
+          AND COALESCE(delivered_session_record_id, '') != ?
+        ORDER BY COALESCE(timestamp, created_at) ASC, created_at ASC
+        LIMIT ?
+      `
+      )
+      .all(openimConversationId, sessionRecordId, Math.max(1, Math.min(limit, 1000))) as SemanticEventRow[];
     return rows.map(mapSemanticEventRow);
   }
 }
@@ -174,6 +254,11 @@ function mapSemanticEventRow(row: SemanticEventRow): SemanticEvent {
     timestamp: row.timestamp ?? row.created_at,
     metadata: parseJson(row.metadata_json) as Record<string, unknown> | null,
     dedupKey: row.dedup_key,
+    deliveredJobId: row.delivered_job_id,
+    deliveredSessionRecordId: row.delivered_session_record_id,
+    deliveredCodexSessionId: row.delivered_codex_session_id,
+    deliveredAt: row.delivered_at,
+    deliveryReason: row.delivery_reason,
     ex: parseJson(row.ex_json),
     rawPayload: parseJson(row.raw_payload_json) as Record<string, unknown>,
     createdAt: row.created_at,
@@ -206,6 +291,11 @@ function toParams(event: SemanticEvent): Record<string, unknown> {
     timestamp: event.timestamp ?? event.createdAt,
     metadataJson: JSON.stringify(event.metadata ?? null),
     dedupKey: event.dedupKey ?? null,
+    deliveredJobId: event.deliveredJobId ?? null,
+    deliveredSessionRecordId: event.deliveredSessionRecordId ?? null,
+    deliveredCodexSessionId: event.deliveredCodexSessionId ?? null,
+    deliveredAt: event.deliveredAt ?? null,
+    deliveryReason: event.deliveryReason ?? null,
     updatedAt: event.updatedAt ?? null
   };
 }

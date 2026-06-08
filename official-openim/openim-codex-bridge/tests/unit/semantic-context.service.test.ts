@@ -116,6 +116,13 @@ describe("semantic context services", () => {
       codexProjectPath: "/workspace/demo"
     });
     repositories.sessions.updateCodexSessionId(session.id, "thread_1");
+    repositories.semanticEvents.markDelivered([repositories.semanticEvents.listByConversationId("single:codex_bot:user_1")[0].id], {
+      jobId: "job_existing",
+      sessionRecordId: session.id,
+      codexSessionId: "thread_1",
+      reason: "new_codex_session",
+      deliveredAt: 4000
+    });
 
     const builder = new ConversationContextBuilder({
       semanticEvents: repositories.semanticEvents,
@@ -132,6 +139,90 @@ describe("semantic context services", () => {
     expect(prompt).toContain("Assistant(Codex): Noted");
     expect(prompt).toContain("Human(User): Current needs sk-****");
     expect(prompt).not.toContain("sk-secret-123456");
+
+    repositories.db.close();
+  });
+
+  it("tracks delivery metadata and reports skipped reasons for context preview", () => {
+    const repositories = createRepositories();
+    const ingest = new SemanticEventIngestService(repositories.semanticEvents, { botUserId: "codex_bot" });
+    const imported = ingest.importHistorySnapshot({
+      conversationID: "single:codex_bot:user_1",
+      messages: [
+        { serverMsgID: "old", sendID: "user_1", senderNickname: "User", contentType: 101, text: "old fact", sendTime: 1000 },
+        { serverMsgID: "recent", sendID: "user_1", senderNickname: "User", contentType: 101, text: "recent fact", sendTime: 2000 }
+      ]
+    });
+    repositories.semanticEvents.markDelivered(imported.importedEventIDs, {
+      jobId: "job_1",
+      sessionRecordId: "csr_1",
+      codexSessionId: "thread_1",
+      reason: "new_codex_session",
+      deliveredAt: 3000
+    });
+
+    const builder = new ConversationContextBuilder({
+      semanticEvents: repositories.semanticEvents,
+      summaries: repositories.summaries,
+      sessions: repositories.sessions,
+      recentLimit: 1
+    });
+    const context = builder.build("single:codex_bot:user_1", {
+      currentEvent: repositories.semanticEvents.getById(imported.importedEventIDs[1])!
+    });
+
+    expect(repositories.semanticEvents.getById(imported.importedEventIDs[0])).toMatchObject({
+      deliveredJobId: "job_1",
+      deliveredSessionRecordId: "csr_1",
+      deliveredCodexSessionId: "thread_1",
+      deliveredAt: 3000,
+      deliveryReason: "new_codex_session"
+    });
+    expect(context.recentEvents.map((event) => event.serverMsgID)).toEqual(["recent"]);
+    expect(context.skipped).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ eventID: imported.importedEventIDs[0], reason: "outside_recent_window" }),
+        expect.objectContaining({ eventID: imported.importedEventIDs[1], reason: "already_delivered" })
+      ])
+    );
+
+    repositories.db.close();
+  });
+
+  it("keeps undelivered imported history available even outside the recent window", () => {
+    const repositories = createRepositories();
+    const ingest = new SemanticEventIngestService(repositories.semanticEvents, { botUserId: "codex_bot" });
+    const imported = ingest.importHistorySnapshot({
+      conversationID: "single:codex_bot:user_1",
+      messages: [
+        { serverMsgID: "old", sendID: "user_1", senderNickname: "User", contentType: 101, text: "old imported fact", sendTime: 1000 },
+        { serverMsgID: "recent", sendID: "user_1", senderNickname: "User", contentType: 101, text: "recent fact", sendTime: 2000 }
+      ]
+    });
+    const session = repositories.sessions.getOrCreateActiveSession({
+      openimConversationId: "single:codex_bot:user_1",
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    repositories.sessions.updateCodexSessionId(session.id, "thread_1");
+    repositories.semanticEvents.markDelivered([imported.importedEventIDs[1]], {
+      jobId: "job_existing",
+      sessionRecordId: session.id,
+      codexSessionId: "thread_1",
+      reason: "new_codex_session",
+      deliveredAt: 3000
+    });
+
+    const builder = new ConversationContextBuilder({
+      semanticEvents: repositories.semanticEvents,
+      summaries: repositories.summaries,
+      sessions: repositories.sessions,
+      recentLimit: 1
+    });
+    const context = builder.build("single:codex_bot:user_1");
+
+    expect(context.undeliveredHistoryEvents.map((event) => event.serverMsgID)).toEqual(["old"]);
+    expect(context.recentEvents.map((event) => event.serverMsgID)).toEqual(["old", "recent"]);
 
     repositories.db.close();
   });

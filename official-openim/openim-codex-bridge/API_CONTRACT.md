@@ -216,6 +216,29 @@ counted but skipped.
 
 ## Semantic Context
 
+Phase 4 semantic context is a supplement layer, not a replacement for Codex CLI runtime context.
+Codex CLI remains the primary manager for session resume, transcript continuation, and internal
+compaction. For a normal resumed Codex session, the bridge sends only the current user message.
+The bridge includes OpenIM semantic context only when one of these supplement triggers applies:
+
+- new Codex session without prior runtime context
+- session switch, rebind, or resume gap
+- user explicitly asks to use previous OpenIM chat history
+- imported OpenIM history has not yet been delivered to the active session/job
+- group speaker-aware context is needed
+- diagnostics or prompt preview is requested
+
+Each semantic event may carry delivery metadata:
+
+- `deliveredJobId`
+- `deliveredSessionRecordId`
+- `deliveredCodexSessionId`
+- `deliveredAt`
+- `deliveryReason`
+
+Imported history is considered undelivered until it is included in a semantic-context supplement
+for the active session record.
+
 `GET /api/conversations/:conversationId/semantic-events?limit=200&includeRuntime=false`
 
 Returns normalized semantic events for a conversation. OpenIM webhook messages, imported history
@@ -231,6 +254,8 @@ Returns the context builder diagnostics used to explain prompt construction:
 - `skippedReasons`
 - `roleCounts`
 - `actorCounts`
+- `semanticContextIncluded`
+- `semanticContextReason`
 - `promptPreview` when requested
 - `promptRedacted`
 
@@ -240,12 +265,14 @@ Returns the current rolling summary, or `null`.
 
 `POST /api/conversations/:conversationId/context/summarize?recentLimit=30`
 
-Creates or updates a deterministic rolling summary over events older than the recent window.
-Automatic summary is disabled by default.
+Creates or updates a deterministic manual summary over events older than the recent window.
+Automatic model-based rolling summary is not enabled by default and is intentionally separate from
+Codex CLI's own session compaction.
 
-Prompt input is built from conversation metadata, binding/session metadata, rolling summary, recent
-semantic events, and the current user message. API keys, tokens, and runtime profile secrets must
-not appear in prompt previews.
+When a supplement trigger applies, prompt input is built from conversation metadata,
+binding/session metadata, rolling summary, recent semantic events, undelivered imported history,
+and the current user message. API keys, tokens, and runtime profile secrets must not appear in
+prompt previews.
 
 ## Project Path Policy
 

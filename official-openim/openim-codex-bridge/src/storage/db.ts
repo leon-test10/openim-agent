@@ -211,6 +211,11 @@ function migrate(db: BridgeDatabase): void {
   ensureColumn(db, "semantic_events", "timestamp", "INTEGER");
   ensureColumn(db, "semantic_events", "metadata_json", "TEXT");
   ensureColumn(db, "semantic_events", "dedup_key", "TEXT");
+  ensureColumn(db, "semantic_events", "delivered_job_id", "TEXT");
+  ensureColumn(db, "semantic_events", "delivered_session_record_id", "TEXT");
+  ensureColumn(db, "semantic_events", "delivered_codex_session_id", "TEXT");
+  ensureColumn(db, "semantic_events", "delivered_at", "INTEGER");
+  ensureColumn(db, "semantic_events", "delivery_reason", "TEXT");
   ensureColumn(db, "semantic_events", "updated_at", "INTEGER");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_semantic_events_source_message

@@ -18,6 +18,7 @@ import { ConversationEventBus, type ConversationStreamEvent } from "./core/conve
 import { SemanticEventIngestService } from "./core/semantic-event-ingest.service.js";
 import { buildContextPreview, ConversationContextBuilder } from "./core/conversation-context.service.js";
 import { buildCodexPrompt } from "./core/prompt-builder.service.js";
+import { decideContextSupplement } from "./core/context-supplement-policy.js";
 import type { SemanticEvent } from "./core/semantic-event.js";
 import { parseProjectPathAllowlist, validateProjectPath } from "./core/project-path-policy.js";
 import {
@@ -673,10 +674,20 @@ export async function createServer(context: AppContext, logger: Logger) {
       recentLimit: parsePositiveInteger(query.recentLimit, 30)
     });
     const conversationContext = builder.build(conversationId);
+    const activeSession = context.sessions.getActiveByConversationId(conversationId);
+    const currentEvent = conversationContext.recentEvents.at(-1);
+    const supplement = activeSession && currentEvent
+      ? decideContextSupplement({
+          session: activeSession,
+          currentEvent,
+          recentEvents: conversationContext.recentEvents,
+          diagnosticsPreview: parseBooleanQuery(query.includePrompt)
+        })
+      : undefined;
     const promptPreview = parseBooleanQuery(query.includePrompt)
       ? buildCodexPrompt({ context: conversationContext })
       : undefined;
-    return buildContextPreview(conversationContext, promptPreview);
+    return buildContextPreview(conversationContext, promptPreview, supplement);
   });
 
   app.post("/api/conversations/:conversationId/openim-history-snapshots", async (request, reply) => {

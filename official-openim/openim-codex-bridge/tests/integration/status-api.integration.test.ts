@@ -17,7 +17,7 @@ import { ConversationEventBus } from "../../src/core/conversation-event-bus.js";
 import { createServer } from "../../src/server.js";
 import type { AppContext } from "../../src/app-context.js";
 import type { SemanticEvent } from "../../src/core/semantic-event.js";
-import type { CodexCliAdapter, CodexRunHandle, CodexRunInput, CodexRunResult } from "../../src/adapters/codex/codex-types.js";
+import type { CodexCliAdapter, CodexResumeInput, CodexRunHandle, CodexRunInput, CodexRunResult } from "../../src/adapters/codex/codex-types.js";
 
 const tempDirs: string[] = [];
 
@@ -1222,6 +1222,95 @@ describe("status API", () => {
     expect(capturedInput?.prompt).toContain("Human(User): prior semantic instruction");
     expect(capturedInput?.prompt).toContain("Assistant(Codex): prior assistant answer");
     expect(capturedInput?.prompt).toContain("Current user message:\nplease inspect status");
+    expect(context.semanticEvents.listByConversationId(event.openimConversationId)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          text: "prior semantic instruction",
+          deliveredJobId: jobId,
+          deliveredSessionRecordId: expect.any(String),
+          deliveryReason: "new_codex_session"
+        })
+      ])
+    );
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("resumes an existing Codex session with only the current user message by default", async () => {
+    let capturedInput: CodexResumeInput | null = null;
+    const codex: CodexCliAdapter = {
+      runNewTask: async () => ({ ok: true, outputText: "unused", rawOutput: "" }),
+      resumeTask: async () => ({ ok: true, outputText: "unused", rawOutput: "" }),
+      resumeTaskCancellable: (input): CodexRunHandle => {
+        capturedInput = input;
+        return {
+          pid: 1234,
+          promise: Promise.resolve({
+            ok: true,
+            sessionId: "thread_1",
+            outputText: "resume ok",
+            rawOutput: ""
+          }),
+          cancel: async () => undefined
+        };
+      }
+    };
+    const context = createTempContext({ codex });
+    context.semanticEvents.insert(event);
+    const session = context.sessions.getOrCreateActiveSession({
+      openimConversationId: event.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo"
+    });
+    context.sessions.updateCodexSessionId(session.id, "thread_1");
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/openim-history-snapshots`,
+      payload: {
+        messages: [
+          {
+            clientMsgID: "delivered_history",
+            sendID: "user_1",
+            senderNickname: "User",
+            contentType: 101,
+            text: "already delivered history",
+            sendTime: 1000
+          }
+        ]
+      }
+    });
+    const imported = context.semanticEvents
+      .listByConversationId(event.openimConversationId)
+      .find((item) => item.text === "already delivered history")!;
+    context.semanticEvents.markDelivered([imported.id], {
+      jobId: "job_previous",
+      sessionRecordId: session.id,
+      codexSessionId: "thread_1",
+      reason: "new_codex_session",
+      deliveredAt: 2000
+    });
+
+    const webhook = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-single-msg",
+      payload: {
+        sendID: "user_1",
+        recvID: "codex_bot",
+        conversationID: event.openimConversationId,
+        contentType: 101,
+        content: JSON.stringify({ content: "just continue current task" })
+      }
+    });
+    const jobId = webhook.json().data.jobId as string;
+    await waitFor(() => context.jobs.getById(jobId)?.status === "succeeded");
+
+    expect(capturedInput?.sessionId).toBe("thread_1");
+    expect(capturedInput?.prompt).toContain("User new message:\njust continue current task");
+    expect(capturedInput?.prompt).not.toContain("Recent OpenIM messages:");
+    expect(capturedInput?.prompt).not.toContain("already delivered history");
 
     await app.close();
     context.db.close();

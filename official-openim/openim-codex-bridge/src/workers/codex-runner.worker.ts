@@ -6,6 +6,7 @@ import type { SemanticEvent } from "../core/semantic-event.js";
 import { ensureCodexRuntimeHome } from "../core/codex-runtime-home.service.js";
 import { buildCodexPrompt } from "../core/prompt-builder.service.js";
 import { ConversationContextBuilder } from "../core/conversation-context.service.js";
+import { decideContextSupplement } from "../core/context-supplement-policy.js";
 import { normalizeCodexJsonEvent } from "../adapters/codex/codex-output.parser.js";
 import { createId } from "../utils/ids.js";
 
@@ -117,10 +118,23 @@ export class CodexRunnerWorker {
       sessions: this.context.sessions,
       recentLimit: this.context.config.CONTEXT_RECENT_EVENT_LIMIT
     });
-    const prompt = buildCodexPrompt({
-      context: contextBuilder.build(job.openimConversationId, { currentEvent: event }),
-      currentEvent: event
+    const conversationContext = contextBuilder.build(job.openimConversationId, { currentEvent: event });
+    const supplementDecision = decideContextSupplement({
+      session,
+      currentEvent: event,
+      recentEvents: conversationContext.recentEvents
     });
+    const prompt = supplementDecision.includeSemanticContext
+      ? buildCodexPrompt({
+          context: conversationContext,
+          currentEvent: event
+        })
+      : buildCodexPrompt({
+          openimConversationId: job.openimConversationId,
+          codexProjectPath: session.codexProjectPath,
+          codexSessionId: session.codexSessionId,
+          userText: job.inputText
+        });
     const codexHomeDir = ensureCodexRuntimeHome(session, this.context.config);
     const runtimeProfile = session.runtimeProfileId
       ? this.context.runtimeProfiles.getWithSecret(session.runtimeProfileId)
@@ -157,8 +171,20 @@ export class CodexRunnerWorker {
       this.recordRuntimeEvent(jobId, session.id, job.openimConversationId, {
         type: "bridge.worker_started",
         queuedMs: workerStartedAt - job.createdAt,
-        createdAt: workerStartedAt
+        createdAt: workerStartedAt,
+        semanticContextIncluded: supplementDecision.includeSemanticContext,
+        semanticContextReason: supplementDecision.reason,
+        semanticContextEventCount: supplementDecision.deliverableEventIDs.length
       });
+      if (supplementDecision.includeSemanticContext) {
+        this.context.semanticEvents.markDelivered(supplementDecision.deliverableEventIDs, {
+          jobId,
+          sessionRecordId: session.id,
+          codexSessionId: session.codexSessionId,
+          reason: supplementDecision.reason,
+          deliveredAt: workerStartedAt
+        });
+      }
       let firstCodexEventSeen = false;
       const recordCodexEvent = (codexEvent: Record<string, unknown>) => {
         if (!firstCodexEventSeen) {

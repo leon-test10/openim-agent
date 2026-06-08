@@ -181,6 +181,26 @@ MVP filtering rules:
 - ignore when `ex.agent.generated_by` is `codex`
 - ignore non-text messages; text content type is `101`
 
+## Semantic Context Policy
+
+Codex CLI remains the primary runtime context manager. The bridge does not replace Codex resume,
+transcript continuation, planning, or internal compaction with OpenIM history.
+
+For a normal resumed Codex session, the worker sends only the current user message to
+`codex exec resume`. OpenIM semantic context is attached only as a supplement when needed:
+
+- the active session has no Codex runtime session id yet
+- a session was switched, rebound, or forked
+- the user explicitly asks to use previous OpenIM chat history
+- imported OpenIM history has not yet been delivered to the active session/job
+- group speaker-aware context is needed
+- diagnostics or prompt preview is requested
+
+Semantic events track delivery metadata (`deliveredJobId`, `deliveredSessionRecordId`,
+`deliveredCodexSessionId`, `deliveredAt`, and `deliveryReason`) so imported history is not
+redelivered on every normal resume. Manual summaries are deterministic bridge diagnostics and
+supplements; they are not a replacement for Codex CLI's own compaction.
+
 ## Session Model
 
 The bridge supports one OpenIM conversation with multiple Codex session records. Only one record is active at a time.

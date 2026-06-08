@@ -25,6 +25,11 @@ export interface SemanticEvent {
   timestamp?: number;
   metadata?: Record<string, unknown> | null;
   dedupKey?: string | null;
+  deliveredJobId?: string | null;
+  deliveredSessionRecordId?: string | null;
+  deliveredCodexSessionId?: string | null;
+  deliveredAt?: number | null;
+  deliveryReason?: string | null;
   ex: unknown;
   rawPayload: unknown;
   createdAt: number;
