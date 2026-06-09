@@ -136,4 +136,22 @@ describe("shouldCreateRuntimeJob", () => {
 
     expect(decision).toEqual({ shouldRun: false, reason: "group_message_not_addressed_to_bot" });
   });
+
+  it("accepts group text that replies to a bot message without a mention", () => {
+    const decision = shouldCreateRuntimeJob(
+      {
+        ...baseEvent,
+        openimConversationId: "group:group_1",
+        receiverUserId: null,
+        groupId: "group_1",
+        contentType: 114,
+        eventType: "openim.group.quote",
+        text: "please continue this thread",
+        metadata: { groupTrigger: "reply_to_bot" }
+      },
+      { botUserId: "codex_bot", groupBotEnabled: true }
+    );
+
+    expect(decision).toEqual({ shouldRun: true });
+  });
 });

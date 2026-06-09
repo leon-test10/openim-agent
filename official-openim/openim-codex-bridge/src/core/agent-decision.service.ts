@@ -74,7 +74,7 @@ function shouldCreateGroupRuntimeJob(event: SemanticEvent, config: AgentDecision
     return { shouldRun: false, reason: "generated_by_codex" };
   }
 
-  if (event.contentType !== 101) {
+  if (event.contentType !== 101 && event.contentType !== 114) {
     return { shouldRun: false, reason: "unsupported_content_type" };
   }
 
@@ -83,7 +83,7 @@ function shouldCreateGroupRuntimeJob(event: SemanticEvent, config: AgentDecision
     return { shouldRun: false, reason: "empty_text" };
   }
 
-  if (!isAddressedToBot(text, config.botUserId)) {
+  if (!isAddressedToBot(text, config.botUserId) && !isReplyToBot(event)) {
     return { shouldRun: false, reason: "group_message_not_addressed_to_bot" };
   }
 
@@ -113,4 +113,8 @@ function isAllowed(value: string | null | undefined, allowlist: readonly string[
     return true;
   }
   return Boolean(value && allowlist.includes(value));
+}
+
+function isReplyToBot(event: SemanticEvent): boolean {
+  return event.metadata?.groupTrigger === "reply_to_bot";
 }

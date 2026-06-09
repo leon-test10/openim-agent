@@ -42,6 +42,11 @@ When group bot execution is enabled, Phase 5A still only creates jobs for text m
 `OPENIM_BOT_USER_ID`, such as `@codex_bot ...`. Non-mentioned group messages return
 `group_message_not_addressed_to_bot`; disabled group traffic returns `group_bot_disabled`.
 
+Phase 5C also permits quote/reply triggers: if a group message has no textual mention but its
+OpenIM quote/reply payload references a message sent by `OPENIM_BOT_USER_ID`, the bridge may create
+a runtime job. This trigger is persisted as semantic event metadata
+`{ "groupTrigger": "reply_to_bot" }`.
+
 Phase 5B group permission policy is enforced server-side:
 
 - `OPENIM_GROUP_ALLOWLIST` optionally restricts allowed `groupID` values.

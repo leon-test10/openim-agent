@@ -61,4 +61,28 @@ describe("parseAfterSendGroupMsgPayload", () => {
     expect(event.text).toBe("@codex_bot help");
     expect(event.eventType).toBe("openim.group.text");
   });
+
+  it("extracts group quote text and marks replies to the bot", () => {
+    const event = parseAfterSendGroupMsgPayload(
+      {
+        sendID: "user_1",
+        groupID: "group_1",
+        contentType: 114,
+        content: JSON.stringify({
+          quoteElem: {
+            text: "please follow up",
+            quoteMessage: {
+              sendID: "codex_bot",
+              clientMsgID: "bot_reply_1"
+            }
+          }
+        })
+      },
+      { botUserId: "codex_bot" }
+    );
+
+    expect(event.eventType).toBe("openim.group.quote");
+    expect(event.text).toBe("please follow up");
+    expect(event.metadata).toEqual({ groupTrigger: "reply_to_bot" });
+  });
 });

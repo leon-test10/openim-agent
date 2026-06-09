@@ -224,8 +224,13 @@ Both allowlists accept comma or semicolon separated ids. Empty allowlists mean "
 restriction"; `OPENIM_GROUP_BOT_ENABLED` and mention detection still apply. Denied group traffic is
 still ingested as semantic context and returns `group_not_allowed` or `group_sender_not_allowed`.
 
-This is not full group bot productization: group binding policy, quote/reply triggering, and
-auto-reply policy remain later Phase 5 work.
+Phase 5C adds quote/reply triggering for group messages. A group message without `@codex_bot` may
+still create a runtime job when its OpenIM quote/reply payload references a bot message. The bridge
+records this as semantic event metadata `groupTrigger=reply_to_bot`. Ordinary non-mentioned group
+messages still do not trigger jobs.
+
+This is not full group bot productization: group binding policy and auto-reply policy remain later
+Phase 5 work.
 
 ## Semantic Context Policy
 
@@ -279,6 +284,9 @@ and can queue runtime jobs only when `OPENIM_GROUP_BOT_ENABLED=true` and the tex
 Phase 5B adds backend group permission gates through `OPENIM_GROUP_ALLOWLIST` and
 `OPENIM_GROUP_SENDER_ALLOWLIST`. Denied group messages remain semantic events but do not create
 runtime jobs.
+
+Phase 5C adds group quote/reply trigger detection. Quote messages that reference a bot message can
+trigger runtime jobs without a textual mention; the trigger is persisted in semantic event metadata.
 
 ## Session Model
 

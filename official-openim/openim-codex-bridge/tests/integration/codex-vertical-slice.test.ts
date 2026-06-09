@@ -214,7 +214,7 @@ describe("Codex vertical slice through AgentRunner", () => {
     context.db.close();
   });
 
-  it("queues a group webhook job only when the bot is mentioned and replies to the group", async () => {
+  it("queues a group webhook job when the bot is mentioned or replied to and replies to the group", async () => {
     const sentTexts: string[] = [];
     const sentMessages: Array<{ text: string; recvId: string; groupId?: string | null }> = [];
     const runnerCalls: string[] = [];
@@ -309,6 +309,40 @@ describe("Codex vertical slice through AgentRunner", () => {
       outputText: "GROUP_ACK"
     });
     expect(sentMessages).toEqual([
+      { text: "GROUP_ACK", recvId: "bridge_user_1", groupId: "group_1" }
+    ]);
+
+    const quoteReply = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-group-msg",
+      payload: {
+        sendID: "bridge_user_1",
+        groupID: "group_1",
+        contentType: 114,
+        content: JSON.stringify({
+          quoteElem: {
+            text: "please continue GROUP_ACK",
+            quoteMessage: {
+              sendID: "codex_bot",
+              clientMsgID: "bot_reply_1"
+            }
+          }
+        })
+      }
+    });
+    expect(quoteReply.statusCode).toBe(200);
+    const quoteJobId = quoteReply.json().data.jobId as string;
+    await waitFor(() => context.jobs.getById(quoteJobId)?.status === "succeeded");
+
+    expect(runnerCalls).toEqual([
+      "group:group_1:@codex_bot please reply GROUP_ACK",
+      "group:group_1:please continue GROUP_ACK"
+    ]);
+    expect(context.semanticEvents.getById(context.jobs.getById(quoteJobId)!.semanticEventId!)).toMatchObject({
+      metadata: { groupTrigger: "reply_to_bot" }
+    });
+    expect(sentMessages).toEqual([
+      { text: "GROUP_ACK", recvId: "bridge_user_1", groupId: "group_1" },
       { text: "GROUP_ACK", recvId: "bridge_user_1", groupId: "group_1" }
     ]);
 
