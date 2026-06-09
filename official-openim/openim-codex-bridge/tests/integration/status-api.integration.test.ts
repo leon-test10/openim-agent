@@ -131,6 +131,7 @@ describe("status API", () => {
     expect(meta.statusCode).toBe(200);
     expect(meta.json()).toMatchObject({
       name: "openim-codex-bridge",
+      runtimeKind: "codex_cli",
       capabilities: {
         sessionMetadata: true,
         sessionActivate: true,
@@ -164,6 +165,36 @@ describe("status API", () => {
     });
     expect(preflight.statusCode).toBe(204);
     expect(preflight.headers["access-control-allow-methods"]).toContain("PATCH");
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("reports active runtime kind in meta and runtime profile aliases", async () => {
+    const context = createTempContext();
+    context.runner = {
+      kind: "template",
+      run: () => ({
+        pid: null,
+        promise: Promise.resolve({ ok: true, outputText: "", externalSessionId: null }),
+        cancel: async () => undefined
+      })
+    };
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const meta = await app.inject({ method: "GET", url: "/api/meta" });
+    expect(meta.statusCode).toBe(200);
+    expect(meta.json()).toMatchObject({
+      runtimeKind: "template",
+      capabilities: { templateRuntime: true }
+    });
+
+    const profiles = await app.inject({ method: "GET", url: "/api/runtime/profiles" });
+    expect(profiles.statusCode).toBe(200);
+    expect(profiles.json()).toMatchObject({
+      runtimeKind: "template",
+      profiles: []
+    });
 
     await app.close();
     context.db.close();

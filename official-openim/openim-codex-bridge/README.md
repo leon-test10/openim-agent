@@ -415,7 +415,7 @@ The detailed Electron-facing API contract is tracked in `API_CONTRACT.md`.
 
 The bridge now exposes runtime-named API aliases while keeping the legacy Codex API stable for existing Electron clients.
 
-- `runtimeKind` is currently `codex_cli`.
+- `runtimeKind` reflects the active bridge runtime: `codex_cli`, `template`, `openai_compatible`, or spike-only `openhands`.
 - Runtime session views map `externalSessionId` to the legacy `codexSessionId`.
 - Runtime session views map `projectPath` to `codexProjectPath` and `runtimeHomeDir` to `codexHomeDir`.
 - Runtime job views expose `externalSessionIdBefore/After` while retaining legacy Codex fields under `legacyCodex`.

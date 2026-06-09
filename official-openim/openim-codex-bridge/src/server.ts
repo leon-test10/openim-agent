@@ -106,7 +106,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     const includeDeleted = parseBooleanQuery((request.query as { includeDeleted?: string }).includeDeleted);
     const policy = runtimeProfilePolicyForRequest(context, request.headers);
     return {
-      runtimeKind: "codex_cli",
+      runtimeKind: activeRuntimeKind(context),
       profiles: context.runtimeProfiles.list({ includeDeleted }).map((profile) => redactRuntimeProfileForPolicy(profile, policy))
     };
   });
@@ -1293,6 +1293,7 @@ type HeaderBag = Record<string, string | string[] | undefined>;
 function buildBridgeMeta(context: AppContext, headers: HeaderBag) {
   return {
     ...BRIDGE_META,
+    runtimeKind: activeRuntimeKind(context),
     runtimePolicy: runtimeProfilePolicyForRequest(context, headers),
     projectPathPolicy: {
       allowlist: parseProjectPathAllowlist(context.config.CODEX_WORKSPACE_ALLOWLIST, context.config.CODEX_DEFAULT_PROJECT_PATH)

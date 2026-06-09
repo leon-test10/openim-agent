@@ -11,7 +11,7 @@ Returns `{ ok: true, ...meta }`.
 
 `GET /api/meta`
 
-Returns bridge name, version, `apiVersion`, capabilities, `runtimePolicy`, and
+Returns bridge name, version, `apiVersion`, active `runtimeKind`, capabilities, `runtimePolicy`, and
 `projectPathPolicy.allowlist`.
 
 Capabilities include Phase 4 `semanticContext` when the bridge supports semantic event import,
@@ -133,7 +133,7 @@ Returns UI state for one OpenIM conversation:
 
 Runtime-named equivalent for new clients. Returns:
 
-- `runtimeKind`, currently `codex_cli`, `openai_compatible`, or spike-only `openhands`
+- `runtimeKind`: `codex_cli`, `template`, `openai_compatible`, or spike-only `openhands`
 - `activeSession` as `RuntimeSessionView`
 - `activeJob`, `latestJob`, and `recentJobs` as runtime job views
 - `queuedJobCount`
@@ -209,8 +209,8 @@ Lists session records.
 
 Lists session records as runtime views. Runtime view field mapping:
 
-- `runtimeKind`: `codex_cli` by default, `openai_compatible` when configured
-- `externalSessionId`: legacy `codexSessionId` for `codex_cli`; `null` for `openai_compatible` v1
+- `runtimeKind`: `codex_cli` by default, `template`, `openai_compatible`, or `openhands` when configured
+- `externalSessionId`: legacy `codexSessionId` for `codex_cli`; `null` for stateless non-Codex runtimes
 - `projectPath`: legacy `codexProjectPath`
 - `runtimeHomeDir`: legacy `codexHomeDir`
 - `legacyCodex`: original Codex-specific fields retained for migration/debugging
