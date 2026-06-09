@@ -46,6 +46,7 @@ function createTempContext(
     OPENIM_GROUP_SENDER_ALLOWLIST: "",
     OPENIM_GROUP_REQUIRE_BINDING: false,
     OPENIM_GROUP_PROJECT_BINDINGS: "",
+    OPENIM_GROUP_AUTO_REPLY_POLICY: "mention_or_reply" as const,
     RUNTIME_DEFAULT_KIND: runner.kind,
     CODEX_BIN: "codex",
     CODEX_DEFAULT_PROJECT_PATH: "/workspace/demo",
@@ -337,6 +338,32 @@ describe("Codex vertical slice through AgentRunner", () => {
       { text: "GROUP_ACK", recvId: "bridge_user_1", groupId: "group_1" }
     ]);
 
+    context.config.OPENIM_GROUP_AUTO_REPLY_POLICY = "mention_only";
+    const quoteReplyDenied = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-group-msg",
+      payload: {
+        sendID: "bridge_user_1",
+        groupID: "group_1",
+        contentType: 114,
+        content: JSON.stringify({
+          quoteElem: {
+            text: "please continue but policy denies",
+            quoteMessage: {
+              sendID: "codex_bot",
+              clientMsgID: "bot_reply_denied"
+            }
+          }
+        })
+      }
+    });
+    expect(quoteReplyDenied.statusCode).toBe(200);
+    expect(quoteReplyDenied.json().data).toMatchObject({
+      ignored: true,
+      reason: "group_message_not_addressed_to_bot"
+    });
+
+    context.config.OPENIM_GROUP_AUTO_REPLY_POLICY = "mention_or_reply";
     const quoteReply = await app.inject({
       method: "POST",
       url: "/webhooks/openim/after-send-group-msg",

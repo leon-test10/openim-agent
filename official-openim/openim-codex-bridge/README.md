@@ -127,6 +127,7 @@ OPENIM_GROUP_ALLOWLIST=
 OPENIM_GROUP_SENDER_ALLOWLIST=
 OPENIM_GROUP_REQUIRE_BINDING=false
 OPENIM_GROUP_PROJECT_BINDINGS=
+OPENIM_GROUP_AUTO_REPLY_POLICY=mention_or_reply
 
 RUNTIME_DEFAULT_KIND=codex_cli
 
@@ -240,7 +241,14 @@ Phase 5D adds backend group binding policy:
 Group binding paths still pass through `CODEX_WORKSPACE_ALLOWLIST`. When binding is required and a
 group has no mapping, the callback returns `group_binding_required` after semantic event ingestion.
 
-This is not full group bot productization: auto-reply policy remains later Phase 5 work.
+Phase 5E adds backend group auto-reply policy:
+
+- `OPENIM_GROUP_AUTO_REPLY_POLICY=mention_or_reply` accepts mentions and quote/replies to bot output.
+- `OPENIM_GROUP_AUTO_REPLY_POLICY=mention_only` accepts only textual bot mentions.
+- `OPENIM_GROUP_AUTO_REPLY_POLICY=reply_only` accepts only quote/replies to bot output.
+- `OPENIM_GROUP_AUTO_REPLY_POLICY=disabled` ingests group semantic events but does not create jobs.
+
+This remains a backend policy; no Codex controls are added to OpenIM native settings.
 
 ## Semantic Context Policy
 
@@ -300,6 +308,9 @@ trigger runtime jobs without a textual mention; the trigger is persisted in sema
 
 Phase 5D adds backend group project binding policy. Group ids can map to explicit workspace paths,
 and deployments can require such bindings before group messages create runtime jobs.
+
+Phase 5E adds backend group auto-reply policy so deployments can restrict runtime job creation to
+mentions, quote/replies, both, or neither.
 
 ## Session Model
 

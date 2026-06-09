@@ -40,6 +40,7 @@ function createTempContext(): AppContext {
     OPENIM_GROUP_SENDER_ALLOWLIST: "",
     OPENIM_GROUP_REQUIRE_BINDING: false,
     OPENIM_GROUP_PROJECT_BINDINGS: "",
+    OPENIM_GROUP_AUTO_REPLY_POLICY: "mention_or_reply" as const,
     RUNTIME_DEFAULT_KIND: "codex_cli" as const,
     CODEX_BIN: "codex",
     CODEX_DEFAULT_PROJECT_PATH: "/workspace/demo",

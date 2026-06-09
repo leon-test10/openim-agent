@@ -7,6 +7,7 @@ export type AgentDecisionReason =
   | "unsupported_content_type"
   | "empty_text"
   | "group_bot_disabled"
+  | "group_auto_reply_disabled"
   | "group_not_allowed"
   | "group_sender_not_allowed"
   | "group_message_not_addressed_to_bot";
@@ -20,6 +21,7 @@ export interface AgentDecisionConfig {
   groupBotEnabled?: boolean;
   groupAllowlist?: readonly string[];
   groupSenderAllowlist?: readonly string[];
+  groupAutoReplyPolicy?: "mention_or_reply" | "mention_only" | "reply_only" | "disabled";
 }
 
 export function shouldCreateRuntimeJob(
@@ -83,10 +85,35 @@ function shouldCreateGroupRuntimeJob(event: SemanticEvent, config: AgentDecision
     return { shouldRun: false, reason: "empty_text" };
   }
 
-  if (!isAddressedToBot(text, config.botUserId) && !isReplyToBot(event)) {
-    return { shouldRun: false, reason: "group_message_not_addressed_to_bot" };
+  const addressedToBot = isAddressedToBot(text, config.botUserId);
+  const replyToBot = isReplyToBot(event);
+  const triggerAllowed = isGroupTriggerAllowed(config.groupAutoReplyPolicy ?? "mention_or_reply", {
+    addressedToBot,
+    replyToBot
+  });
+  if (!triggerAllowed.shouldRun) {
+    return { shouldRun: false, reason: triggerAllowed.reason };
   }
 
+  return { shouldRun: true };
+}
+
+function isGroupTriggerAllowed(
+  policy: NonNullable<AgentDecisionConfig["groupAutoReplyPolicy"]>,
+  input: { addressedToBot: boolean; replyToBot: boolean }
+): AgentDecision {
+  if (policy === "disabled") {
+    return { shouldRun: false, reason: "group_auto_reply_disabled" };
+  }
+  if (policy === "mention_only") {
+    return input.addressedToBot ? { shouldRun: true } : { shouldRun: false, reason: "group_message_not_addressed_to_bot" };
+  }
+  if (policy === "reply_only") {
+    return input.replyToBot ? { shouldRun: true } : { shouldRun: false, reason: "group_message_not_addressed_to_bot" };
+  }
+  if (!input.addressedToBot && !input.replyToBot) {
+    return { shouldRun: false, reason: "group_message_not_addressed_to_bot" };
+  }
   return { shouldRun: true };
 }
 

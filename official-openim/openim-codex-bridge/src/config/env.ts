@@ -13,6 +13,7 @@ const EnvSchema = z.object({
   OPENIM_GROUP_SENDER_ALLOWLIST: z.string().optional().default(""),
   OPENIM_GROUP_REQUIRE_BINDING: z.coerce.boolean().default(false),
   OPENIM_GROUP_PROJECT_BINDINGS: z.string().optional().default(""),
+  OPENIM_GROUP_AUTO_REPLY_POLICY: z.enum(["mention_or_reply", "mention_only", "reply_only", "disabled"]).default("mention_or_reply"),
   RUNTIME_DEFAULT_KIND: z.enum(["codex_cli", "openai_compatible", "openhands"]).default("codex_cli"),
   CODEX_BIN: z.string().default("codex"),
   CODEX_DEFAULT_PROJECT_PATH: z.string().default("/workspace/openim-demo"),

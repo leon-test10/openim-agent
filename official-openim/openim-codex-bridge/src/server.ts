@@ -293,7 +293,8 @@ export async function createServer(context: AppContext, logger: Logger) {
       botUserId: context.config.OPENIM_BOT_USER_ID,
       groupBotEnabled: context.config.OPENIM_GROUP_BOT_ENABLED,
       groupAllowlist: parseConfigList(context.config.OPENIM_GROUP_ALLOWLIST),
-      groupSenderAllowlist: parseConfigList(context.config.OPENIM_GROUP_SENDER_ALLOWLIST)
+      groupSenderAllowlist: parseConfigList(context.config.OPENIM_GROUP_SENDER_ALLOWLIST),
+      groupAutoReplyPolicy: context.config.OPENIM_GROUP_AUTO_REPLY_POLICY
     });
     if (!decision.shouldRun) {
       return openImCallbackOk({ ignored: true, reason: decision.reason });

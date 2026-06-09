@@ -66,6 +66,16 @@ Phase 5D group binding policy is enforced server-side:
 
 Messages rejected by required binding are still semantic events and return `group_binding_required`.
 
+Phase 5E group auto-reply policy is enforced server-side with `OPENIM_GROUP_AUTO_REPLY_POLICY`:
+
+- `mention_or_reply`: mentions and quote/replies can create jobs.
+- `mention_only`: only textual bot mentions can create jobs.
+- `reply_only`: only quote/replies to bot output can create jobs.
+- `disabled`: group messages are ingested but do not create jobs.
+
+Disabled policy returns `group_auto_reply_disabled`. Policies that exclude the observed trigger
+return `group_message_not_addressed_to_bot`.
+
 `POST /webhooks/openim/after-send-group-msg/:command`
 
 Compatibility route for suffixed OpenIM group callback command paths.
