@@ -4,6 +4,7 @@ import type { OpenImAuthClient } from "./openim-auth.client.js";
 export interface SendBotTextInput {
   operationId: string;
   recvId: string;
+  groupId?: string | null;
   text: string;
   metadata: {
     jobId: string;
@@ -30,9 +31,10 @@ export class OpenImMessageSender {
       body: JSON.stringify({
         operationID: input.operationId,
         sendID: this.config.OPENIM_BOT_USER_ID,
-        recvID: input.recvId,
+        recvID: input.groupId ? undefined : input.recvId,
+        groupID: input.groupId ?? undefined,
         contentType: 101,
-        sessionType: 1,
+        sessionType: input.groupId ? 3 : 1,
         content: { content: input.text },
         ex: JSON.stringify({
           agent: {
@@ -52,4 +54,3 @@ export class OpenImMessageSender {
     }
   }
 }
-

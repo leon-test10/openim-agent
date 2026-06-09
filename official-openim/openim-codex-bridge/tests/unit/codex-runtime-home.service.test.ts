@@ -28,6 +28,8 @@ function config(baseHome: string): AppConfig {
     OPENIM_ADMIN_SECRET: "",
     OPENIM_ADMIN_TOKEN: "",
     OPENIM_BOT_USER_ID: "codex_bot",
+    OPENIM_GROUP_BOT_ENABLED: false,
+    RUNTIME_DEFAULT_KIND: "codex_cli",
     CODEX_BIN: "codex",
     CODEX_DEFAULT_PROJECT_PATH: "/workspace/demo",
     CODEX_DEFAULT_MODEL: "",
@@ -37,8 +39,24 @@ function config(baseHome: string): AppConfig {
     CODEX_SESSION_HOME_SEED_MODE: "copy-auth-only",
     CODEX_BASE_HOME: baseHome,
     CODEX_SANDBOX_MODE: "",
+    CODEX_WORKSPACE_ALLOWLIST: "/workspace/demo",
+    CODEX_RUNTIME_ADMIN_TOKEN: "",
+    OPENAI_COMPATIBLE_BASE_URL: "http://127.0.0.1:8000/v1",
+    OPENAI_COMPATIBLE_API_KEY: "dummy",
+    OPENAI_COMPATIBLE_MODEL: "test-model",
+    OPENAI_COMPATIBLE_TIMEOUT_MS: 120000,
+    OPENAI_COMPATIBLE_TEMPERATURE: 0.2,
+    OPENAI_COMPATIBLE_MAX_TOKENS: 2048,
+    OPENHANDS_BASE_URL: "http://127.0.0.1:3000",
+    OPENHANDS_API_KEY: "",
+    OPENHANDS_TIMEOUT_MS: 600000,
+    CONTEXT_RECENT_EVENT_LIMIT: 30,
+    CONTEXT_AUTO_SUMMARY_ENABLED: false,
+    CONTEXT_SUMMARY_EVENT_THRESHOLD: 120,
+    BRIDGE_SECRET_KEY: "0123456789abcdef0123456789abcdef",
     DATABASE_URL: "file:./data/test.sqlite",
-    LOG_LEVEL: "silent"
+    LOG_LEVEL: "silent",
+    NODE_ENV: "test"
   };
 }
 

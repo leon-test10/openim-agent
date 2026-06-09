@@ -46,6 +46,8 @@ beforeMsgModify:
 afterSendGroupMsg:
   enable: false
   timeout: 5
+  # Phase 5A guardrail: keep this disabled unless OPENIM_GROUP_BOT_ENABLED=true
+  # on the bridge and group mention-trigger testing is intentional.
   # See beforeSendSingleMsg comment.
   allowedTypes: []
   deniedTypes: []

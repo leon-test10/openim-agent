@@ -1,12 +1,13 @@
 import sensible from "@fastify/sensible";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import type { FastifyReply } from "fastify";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Logger } from "pino";
 import type { AppContext } from "./app-context.js";
 import { shouldCreateRuntimeJob } from "./core/agent-decision.service.js";
-import { parseAfterSendSingleMsgPayload } from "./adapters/openim/openim-message.parser.js";
+import { parseAfterSendGroupMsgPayload, parseAfterSendSingleMsgPayload } from "./adapters/openim/openim-message.parser.js";
 import { buildCodexRuntimeArgs, buildCodexRuntimeEnv, runCodexRuntimeProbe } from "./adapters/codex/codex-cli.adapter.js";
 import { CodexCliRunner } from "./runtime/codex-cli.runner.js";
 import { CodexRunnerWorker } from "./workers/codex-runner.worker.js";
@@ -263,7 +264,73 @@ export async function createServer(context: AppContext, logger: Logger) {
     return openImCallbackOk({ ignored: false, jobId: job.id, sessionRecordId: session.id });
   });
 
+  const handleGroupOpenImCallback = async (body: unknown, reply: FastifyReply) => {
+    if (!isRecord(body)) {
+      return reply.badRequest("OpenIM callback payload must be an object");
+    }
+
+    const parsedEvent = parseAfterSendGroupMsgPayload(body, {
+      botUserId: context.config.OPENIM_BOT_USER_ID
+    });
+    const ingestion = semanticIngest.ingestOpenImEvent(parsedEvent);
+    const event = ingestion.event;
+    logger.info(
+      {
+        eventId: event.id,
+        openimMessageId: event.openimMessageId,
+        conversationId: event.openimConversationId,
+        groupID: event.groupId,
+        sendID: event.senderUserId,
+        contentType: event.contentType
+      },
+      "received OpenIM group-message callback"
+    );
+    if (!ingestion.inserted) {
+      return openImCallbackOk({ ignored: true, reason: "duplicate_semantic_event", eventId: event.id });
+    }
+
+    const decision = shouldCreateRuntimeJob(event, {
+      botUserId: context.config.OPENIM_BOT_USER_ID,
+      groupBotEnabled: context.config.OPENIM_GROUP_BOT_ENABLED
+    });
+    if (!decision.shouldRun) {
+      return openImCallbackOk({ ignored: true, reason: decision.reason });
+    }
+
+    const project = validateRequestedProjectPath(context, context.config.CODEX_DEFAULT_PROJECT_PATH);
+    if (!project.ok) {
+      return bridgeApiError(reply, 400, "project_path_not_allowed", "CODEX_DEFAULT_PROJECT_PATH is outside the configured workspace allowlist.", {
+        diagnostics: project.diagnostics
+      });
+    }
+    const session = context.sessions.getOrCreateActiveSession({
+      openimConversationId: event.openimConversationId,
+      openimDisplayUserId: event.groupId ?? event.senderUserId,
+      codexProjectPath: project.normalizedPath!,
+      displayName: summarizeUserText(event.text),
+      lastSummary: summarizeUserText(event.text, 120)
+    });
+    const job = context.jobs.createQueuedJob({
+      sessionRecordId: session.id,
+      semanticEventId: event.id,
+      openimConversationId: event.openimConversationId,
+      inputText: event.text ?? "",
+      codexSessionIdBefore: session.codexSessionId
+    });
+
+    conversationEvents.publishSessionChanged(event.openimConversationId, session, "group_session_created");
+    conversationEvents.publishJob("job_created", job);
+    conversationEvents.publishJob("job_queued", job);
+    worker.enqueue(job, event);
+    return openImCallbackOk({ ignored: false, jobId: job.id, sessionRecordId: session.id });
+  };
+
   app.post("/webhooks/openim/after-send-single-msg/:command", async (request, reply) => {
+    const { command } = request.params as { command?: string };
+    if (isGroupCallbackCommand(command)) {
+      return handleGroupOpenImCallback(request.body, reply);
+    }
+
     if (!isRecord(request.body)) {
       return reply.badRequest("OpenIM callback payload must be an object");
     }
@@ -342,6 +409,14 @@ export async function createServer(context: AppContext, logger: Logger) {
     conversationEvents.publishJob("job_queued", job);
     worker.enqueue(job, event);
     return openImCallbackOk({ ignored: false, jobId: job.id, sessionRecordId: session.id });
+  });
+
+  app.post("/webhooks/openim/after-send-group-msg", async (request, reply) => {
+    return handleGroupOpenImCallback(request.body, reply);
+  });
+
+  app.post("/webhooks/openim/after-send-group-msg/:command", async (request, reply) => {
+    return handleGroupOpenImCallback(request.body, reply);
   });
 
   app.get("/api/jobs/:jobId", async (request, reply) => {
@@ -1445,4 +1520,8 @@ function normalizeOpenImConversationId(conversationId: string, botUserId: string
   }
 
   return conversationId;
+}
+
+function isGroupCallbackCommand(command: string | undefined): boolean {
+  return command?.toLowerCase().includes("group") ?? false;
 }

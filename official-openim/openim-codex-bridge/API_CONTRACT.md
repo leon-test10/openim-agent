@@ -18,6 +18,34 @@ Capabilities include Phase 4 `semanticContext` when the bridge supports semantic
 context preview, and manual summary endpoints. Phase 4C also exposes `runtimeApi` and
 `codexLegacyApi`. Phase 4D exposes `openaiCompatibleRuntime`.
 
+## OpenIM Webhooks
+
+`POST /webhooks/openim/after-send-single-msg`
+
+Consumes OpenIM `afterSendSingleMsg` callbacks. Accepted text messages are ingested into
+`semantic_events` before agent decision/job creation. Existing loop guards remain in force:
+non-bot receivers, bot sender messages, `ex.agent.generated_by=codex`, non-text messages, and empty
+text do not create runtime jobs.
+
+`POST /webhooks/openim/after-send-single-msg/:command`
+
+Compatibility route for OpenIM deployments that append callback command paths to the configured
+webhook URL. `callbackAfterSendGroupMsgCommand` is routed through the group handler.
+
+`POST /webhooks/openim/after-send-group-msg`
+
+Consumes OpenIM `afterSendGroupMsg` callbacks. Group semantic events preserve `groupID`, speaker
+`sendID`, and the group conversation id. Group runtime jobs are disabled unless
+`OPENIM_GROUP_BOT_ENABLED=true`.
+
+When group bot execution is enabled, Phase 5A still only creates jobs for text messages addressed to
+`OPENIM_BOT_USER_ID`, such as `@codex_bot ...`. Non-mentioned group messages return
+`group_message_not_addressed_to_bot`; disabled group traffic returns `group_bot_disabled`.
+
+`POST /webhooks/openim/after-send-group-msg/:command`
+
+Compatibility route for suffixed OpenIM group callback command paths.
+
 ## Conversations
 
 `GET /api/conversations/:conversationId/status`

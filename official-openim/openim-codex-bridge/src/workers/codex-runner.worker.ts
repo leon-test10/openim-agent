@@ -404,6 +404,7 @@ export class CodexRunnerWorker {
       await this.context.openimSender.sendBotText({
         operationId: jobId,
         recvId: event.senderUserId,
+        groupId: event.groupId,
         text,
         metadata: { jobId, sessionRecordId, codexSessionId }
       });

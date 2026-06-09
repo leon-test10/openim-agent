@@ -122,6 +122,7 @@ OPENIM_ADMIN_USER_ID=imAdmin
 OPENIM_ADMIN_SECRET=
 OPENIM_ADMIN_TOKEN=
 OPENIM_BOT_USER_ID=codex_bot
+OPENIM_GROUP_BOT_ENABLED=false
 
 RUNTIME_DEFAULT_KIND=codex_cli
 
@@ -195,6 +196,26 @@ MVP filtering rules:
 - ignore when `ex.agent.generated_by` is `codex`
 - ignore non-text messages; text content type is `101`
 
+### Phase 5A Group Webhook Guardrail
+
+The bridge also exposes a conservative group callback entry:
+
+```text
+http://<bridge-host>:8787/webhooks/openim/after-send-group-msg
+```
+
+OpenIM deployments that append callback command paths to the configured URL are also supported via
+`/webhooks/openim/after-send-single-msg/callbackAfterSendGroupMsgCommand` and
+`/webhooks/openim/after-send-group-msg/callbackAfterSendGroupMsgCommand`.
+
+Group bot execution is disabled by default. Set `OPENIM_GROUP_BOT_ENABLED=true` only for controlled
+testing. When enabled, Phase 5A still queues a runtime job only for text messages that address the
+bot by id, for example `@codex_bot please inspect this`. Non-mentioned group chatter is persisted as
+semantic context but returns `group_message_not_addressed_to_bot` and does not create a job.
+
+This is not full group bot productization: group permissions, group binding policy, quote/reply
+triggering, and auto-reply policy remain later Phase 5 work.
+
 ## Semantic Context Policy
 
 Codex CLI remains the primary runtime context manager. The bridge does not replace Codex resume,
@@ -240,6 +261,10 @@ Phase 4E adds an `openhands` runner spike stub and documents the adapter contrac
 `../docs/openhands-spike.md`. It is intentionally not production-executable yet; keep
 `RUNTIME_DEFAULT_KIND=codex_cli` or `openai_compatible` for real traffic.
 
+Phase 5A adds a disabled-by-default OpenIM group webhook slice. It preserves group semantic events
+and can queue runtime jobs only when `OPENIM_GROUP_BOT_ENABLED=true` and the text message mentions
+`OPENIM_BOT_USER_ID`.
+
 ## Session Model
 
 The bridge supports one OpenIM conversation with multiple Codex session records. Only one record is active at a time.
@@ -267,6 +292,10 @@ cancelled before Codex emits a session id, the next accepted message starts a ne
 
 ```http
 GET /healthz
+POST /webhooks/openim/after-send-single-msg
+POST /webhooks/openim/after-send-single-msg/:command
+POST /webhooks/openim/after-send-group-msg
+POST /webhooks/openim/after-send-group-msg/:command
 GET /api/bindings
 GET /api/bindings/:conversationId
 POST /api/bindings/:conversationId/rebind

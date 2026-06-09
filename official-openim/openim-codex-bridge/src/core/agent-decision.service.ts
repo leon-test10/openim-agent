@@ -5,7 +5,9 @@ export type AgentDecisionReason =
   | "sender_is_bot"
   | "generated_by_codex"
   | "unsupported_content_type"
-  | "empty_text";
+  | "empty_text"
+  | "group_bot_disabled"
+  | "group_message_not_addressed_to_bot";
 
 export type AgentDecision =
   | { shouldRun: true }
@@ -13,12 +15,17 @@ export type AgentDecision =
 
 export interface AgentDecisionConfig {
   botUserId: string;
+  groupBotEnabled?: boolean;
 }
 
 export function shouldCreateRuntimeJob(
   event: SemanticEvent,
   config: AgentDecisionConfig
 ): AgentDecision {
+  if (event.groupId) {
+    return shouldCreateGroupRuntimeJob(event, config);
+  }
+
   if (event.receiverUserId !== config.botUserId) {
     return { shouldRun: false, reason: "receiver_is_not_bot" };
   }
@@ -42,6 +49,35 @@ export function shouldCreateRuntimeJob(
   return { shouldRun: true };
 }
 
+function shouldCreateGroupRuntimeJob(event: SemanticEvent, config: AgentDecisionConfig): AgentDecision {
+  if (!config.groupBotEnabled) {
+    return { shouldRun: false, reason: "group_bot_disabled" };
+  }
+
+  if (event.senderUserId === config.botUserId) {
+    return { shouldRun: false, reason: "sender_is_bot" };
+  }
+
+  if (isGeneratedByCodex(event.ex)) {
+    return { shouldRun: false, reason: "generated_by_codex" };
+  }
+
+  if (event.contentType !== 101) {
+    return { shouldRun: false, reason: "unsupported_content_type" };
+  }
+
+  const text = event.text?.trim();
+  if (!text) {
+    return { shouldRun: false, reason: "empty_text" };
+  }
+
+  if (!isAddressedToBot(text, config.botUserId)) {
+    return { shouldRun: false, reason: "group_message_not_addressed_to_bot" };
+  }
+
+  return { shouldRun: true };
+}
+
 function isGeneratedByCodex(ex: unknown): boolean {
   if (!ex || typeof ex !== "object") {
     return false;
@@ -55,3 +91,7 @@ function isGeneratedByCodex(ex: unknown): boolean {
   return (agent as { generated_by?: unknown }).generated_by === "codex";
 }
 
+function isAddressedToBot(text: string, botUserId: string): boolean {
+  const escaped = botUserId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|\\s)@?${escaped}(\\b|\\s|:|,|，|：)`, "i").test(text);
+}

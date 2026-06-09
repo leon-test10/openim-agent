@@ -26,7 +26,11 @@ afterEach(async () => {
   }
 });
 
-function createTempContext(runner: AgentRunner, sentTexts: string[]): AppContext {
+function createTempContext(
+  runner: AgentRunner,
+  sentTexts: string[],
+  sentMessages: Array<{ text: string; recvId: string; groupId?: string | null }> = []
+): AppContext {
   const dir = mkdtempSync(join(tmpdir(), "openim-codex-vertical-"));
   tempDirs.push(dir);
   const db = openDatabase(`file:${join(dir, "bridge.sqlite")}`);
@@ -37,6 +41,7 @@ function createTempContext(runner: AgentRunner, sentTexts: string[]): AppContext
     OPENIM_ADMIN_SECRET: "openIM123",
     OPENIM_ADMIN_TOKEN: "",
     OPENIM_BOT_USER_ID: "codex_bot",
+    OPENIM_GROUP_BOT_ENABLED: false,
     RUNTIME_DEFAULT_KIND: runner.kind,
     CODEX_BIN: "codex",
     CODEX_DEFAULT_PROJECT_PATH: "/workspace/demo",
@@ -55,6 +60,9 @@ function createTempContext(runner: AgentRunner, sentTexts: string[]): AppContext
     OPENAI_COMPATIBLE_TIMEOUT_MS: 120000,
     OPENAI_COMPATIBLE_TEMPERATURE: 0.2,
     OPENAI_COMPATIBLE_MAX_TOKENS: 2048,
+    OPENHANDS_BASE_URL: "http://127.0.0.1:3000",
+    OPENHANDS_API_KEY: "",
+    OPENHANDS_TIMEOUT_MS: 600000,
     CONTEXT_RECENT_EVENT_LIMIT: 30,
     CONTEXT_AUTO_SUMMARY_ENABLED: false,
     CONTEXT_SUMMARY_EVENT_THRESHOLD: 120,
@@ -83,6 +91,7 @@ function createTempContext(runner: AgentRunner, sentTexts: string[]): AppContext
     openimSender: {
       sendBotText: async (message) => {
         sentTexts.push(message.text);
+        sentMessages.push({ text: message.text, recvId: message.recvId, groupId: message.groupId });
       }
     }
   };
@@ -198,6 +207,74 @@ describe("Codex vertical slice through AgentRunner", () => {
       activeSession: { externalSessionId: null },
       latestJob: { externalSessionIdAfter: null }
     });
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("queues a group webhook job only when the bot is mentioned and replies to the group", async () => {
+    const sentTexts: string[] = [];
+    const sentMessages: Array<{ text: string; recvId: string; groupId?: string | null }> = [];
+    const runnerCalls: string[] = [];
+    const runner: AgentRunner = {
+      kind: "codex_cli",
+      run: (input): RuntimeRunHandle => {
+        runnerCalls.push(`${input.openimConversationId}:${input.inputText}`);
+        return {
+          pid: 42,
+          promise: Promise.resolve({
+            ok: true,
+            externalSessionId: "thread_group_1",
+            outputText: "GROUP_ACK",
+            rawOutput: ""
+          }),
+          cancel: async () => undefined
+        };
+      }
+    };
+    const context = createTempContext(runner, sentTexts, sentMessages);
+    context.config.OPENIM_GROUP_BOT_ENABLED = true;
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const ignored = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-group-msg",
+      payload: {
+        sendID: "bridge_user_1",
+        groupID: "group_1",
+        contentType: 101,
+        content: JSON.stringify({ content: "general chat" })
+      }
+    });
+    expect(ignored.statusCode).toBe(200);
+    expect(ignored.json().data).toMatchObject({
+      ignored: true,
+      reason: "group_message_not_addressed_to_bot"
+    });
+
+    const webhook = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-single-msg/callbackAfterSendGroupMsgCommand",
+      payload: {
+        sendID: "bridge_user_1",
+        groupID: "group_1",
+        contentType: 101,
+        content: JSON.stringify({ content: "@codex_bot please reply GROUP_ACK" })
+      }
+    });
+
+    expect(webhook.statusCode).toBe(200);
+    const jobId = webhook.json().data.jobId as string;
+    await waitFor(() => context.jobs.getById(jobId)?.status === "succeeded");
+
+    expect(runnerCalls).toEqual(["group:group_1:@codex_bot please reply GROUP_ACK"]);
+    expect(context.jobs.getById(jobId)).toMatchObject({
+      status: "succeeded",
+      outputText: "GROUP_ACK"
+    });
+    expect(sentMessages).toEqual([
+      { text: "GROUP_ACK", recvId: "bridge_user_1", groupId: "group_1" }
+    ]);
 
     await app.close();
     context.db.close();

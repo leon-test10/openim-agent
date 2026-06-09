@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAfterSendSingleMsgPayload } from "../../src/adapters/openim/openim-message.parser.js";
+import { parseAfterSendGroupMsgPayload, parseAfterSendSingleMsgPayload } from "../../src/adapters/openim/openim-message.parser.js";
 
 describe("parseAfterSendSingleMsgPayload", () => {
   it("parses text callback payloads and derives a stable single-chat conversation id", () => {
@@ -38,5 +38,27 @@ describe("parseAfterSendSingleMsgPayload", () => {
 
     expect(event.openimConversationId).toBe("si_user_1_codex_bot");
     expect(event.text).toBe("hello");
+  });
+});
+
+describe("parseAfterSendGroupMsgPayload", () => {
+  it("parses text callback payloads and derives a group conversation id", () => {
+    const event = parseAfterSendGroupMsgPayload(
+      {
+        sendID: "user_1",
+        groupID: "group_1",
+        serverMsgID: "server_1",
+        clientMsgID: "client_1",
+        contentType: 101,
+        content: JSON.stringify({ content: "@codex_bot help" })
+      },
+      { botUserId: "codex_bot" }
+    );
+
+    expect(event.openimConversationId).toBe("group:group_1");
+    expect(event.groupId).toBe("group_1");
+    expect(event.receiverUserId).toBeNull();
+    expect(event.text).toBe("@codex_bot help");
+    expect(event.eventType).toBe("openim.group.text");
   });
 });
