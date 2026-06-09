@@ -57,6 +57,15 @@ Phase 5B group permission policy is enforced server-side:
 Denied group messages are still ingested into `semantic_events`, but do not create jobs. Rejection
 reasons are `group_not_allowed` and `group_sender_not_allowed`.
 
+Phase 5D group binding policy is enforced server-side:
+
+- `OPENIM_GROUP_PROJECT_BINDINGS` maps `groupID` to project path with entries like
+  `group_1=/workspace/project-a;group_2=/workspace/project-b`.
+- `OPENIM_GROUP_REQUIRE_BINDING=true` rejects group runtime jobs without an explicit binding.
+- Bound project paths must pass the backend `CODEX_WORKSPACE_ALLOWLIST` policy.
+
+Messages rejected by required binding are still semantic events and return `group_binding_required`.
+
 `POST /webhooks/openim/after-send-group-msg/:command`
 
 Compatibility route for suffixed OpenIM group callback command paths.

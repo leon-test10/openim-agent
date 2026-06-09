@@ -125,6 +125,8 @@ OPENIM_BOT_USER_ID=codex_bot
 OPENIM_GROUP_BOT_ENABLED=false
 OPENIM_GROUP_ALLOWLIST=
 OPENIM_GROUP_SENDER_ALLOWLIST=
+OPENIM_GROUP_REQUIRE_BINDING=false
+OPENIM_GROUP_PROJECT_BINDINGS=
 
 RUNTIME_DEFAULT_KIND=codex_cli
 
@@ -229,8 +231,16 @@ still create a runtime job when its OpenIM quote/reply payload references a bot 
 records this as semantic event metadata `groupTrigger=reply_to_bot`. Ordinary non-mentioned group
 messages still do not trigger jobs.
 
-This is not full group bot productization: group binding policy and auto-reply policy remain later
-Phase 5 work.
+Phase 5D adds backend group binding policy:
+
+- `OPENIM_GROUP_PROJECT_BINDINGS=group_1=/workspace/project-a;group_2=/workspace/project-b` maps
+  OpenIM group ids to workspace paths.
+- `OPENIM_GROUP_REQUIRE_BINDING=true` rejects group runtime jobs without an explicit group binding.
+
+Group binding paths still pass through `CODEX_WORKSPACE_ALLOWLIST`. When binding is required and a
+group has no mapping, the callback returns `group_binding_required` after semantic event ingestion.
+
+This is not full group bot productization: auto-reply policy remains later Phase 5 work.
 
 ## Semantic Context Policy
 
@@ -287,6 +297,9 @@ runtime jobs.
 
 Phase 5C adds group quote/reply trigger detection. Quote messages that reference a bot message can
 trigger runtime jobs without a textual mention; the trigger is persisted in semantic event metadata.
+
+Phase 5D adds backend group project binding policy. Group ids can map to explicit workspace paths,
+and deployments can require such bindings before group messages create runtime jobs.
 
 ## Session Model
 

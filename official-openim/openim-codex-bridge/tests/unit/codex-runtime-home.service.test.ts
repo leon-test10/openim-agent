@@ -31,6 +31,8 @@ function config(baseHome: string): AppConfig {
     OPENIM_GROUP_BOT_ENABLED: false,
     OPENIM_GROUP_ALLOWLIST: "",
     OPENIM_GROUP_SENDER_ALLOWLIST: "",
+    OPENIM_GROUP_REQUIRE_BINDING: false,
+    OPENIM_GROUP_PROJECT_BINDINGS: "",
     RUNTIME_DEFAULT_KIND: "codex_cli",
     CODEX_BIN: "codex",
     CODEX_DEFAULT_PROJECT_PATH: "/workspace/demo",

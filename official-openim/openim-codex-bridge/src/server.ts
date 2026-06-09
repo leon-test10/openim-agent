@@ -299,7 +299,12 @@ export async function createServer(context: AppContext, logger: Logger) {
       return openImCallbackOk({ ignored: true, reason: decision.reason });
     }
 
-    const project = validateRequestedProjectPath(context, context.config.CODEX_DEFAULT_PROJECT_PATH);
+    const groupProjectPath = resolveGroupProjectPath(context, event.groupId);
+    if (!groupProjectPath.ok) {
+      return openImCallbackOk({ ignored: true, reason: groupProjectPath.reason, groupId: event.groupId });
+    }
+
+    const project = validateRequestedProjectPath(context, groupProjectPath.projectPath);
     if (!project.ok) {
       return bridgeApiError(reply, 400, "project_path_not_allowed", "CODEX_DEFAULT_PROJECT_PATH is outside the configured workspace allowlist.", {
         diagnostics: project.diagnostics
@@ -1533,4 +1538,35 @@ function parseConfigList(value: string | undefined): string[] {
     .split(/[;,]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function resolveGroupProjectPath(
+  context: AppContext,
+  groupId: string | null | undefined
+): { ok: true; projectPath: string } | { ok: false; reason: "group_binding_required" } {
+  const bindings = parseConfigMap(context.config.OPENIM_GROUP_PROJECT_BINDINGS);
+  const boundProjectPath = groupId ? bindings.get(groupId) : undefined;
+  if (boundProjectPath) {
+    return { ok: true, projectPath: boundProjectPath };
+  }
+  if (context.config.OPENIM_GROUP_REQUIRE_BINDING) {
+    return { ok: false, reason: "group_binding_required" };
+  }
+  return { ok: true, projectPath: context.config.CODEX_DEFAULT_PROJECT_PATH };
+}
+
+function parseConfigMap(value: string | undefined): Map<string, string> {
+  const result = new Map<string, string>();
+  for (const item of parseConfigList(value)) {
+    const separatorIndex = item.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    const key = item.slice(0, separatorIndex).trim();
+    const mapValue = item.slice(separatorIndex + 1).trim();
+    if (key && mapValue) {
+      result.set(key, mapValue);
+    }
+  }
+  return result;
 }

@@ -44,6 +44,8 @@ function createTempContext(
     OPENIM_GROUP_BOT_ENABLED: false,
     OPENIM_GROUP_ALLOWLIST: "",
     OPENIM_GROUP_SENDER_ALLOWLIST: "",
+    OPENIM_GROUP_REQUIRE_BINDING: false,
+    OPENIM_GROUP_PROJECT_BINDINGS: "",
     RUNTIME_DEFAULT_KIND: runner.kind,
     CODEX_BIN: "codex",
     CODEX_DEFAULT_PROJECT_PATH: "/workspace/demo",
@@ -54,7 +56,7 @@ function createTempContext(
     CODEX_SESSION_HOME_SEED_MODE: "copy-auth-only" as const,
     CODEX_BASE_HOME: "",
     CODEX_SANDBOX_MODE: "",
-    CODEX_WORKSPACE_ALLOWLIST: "/workspace/demo",
+    CODEX_WORKSPACE_ALLOWLIST: "/workspace/demo;/workspace/group-demo",
     CODEX_RUNTIME_ADMIN_TOKEN: "",
     OPENAI_COMPATIBLE_BASE_URL: "http://127.0.0.1:8000/v1",
     OPENAI_COMPATIBLE_API_KEY: "dummy",
@@ -218,10 +220,12 @@ describe("Codex vertical slice through AgentRunner", () => {
     const sentTexts: string[] = [];
     const sentMessages: Array<{ text: string; recvId: string; groupId?: string | null }> = [];
     const runnerCalls: string[] = [];
+    const runnerProjectPaths: string[] = [];
     const runner: AgentRunner = {
       kind: "codex_cli",
       run: (input): RuntimeRunHandle => {
         runnerCalls.push(`${input.openimConversationId}:${input.inputText}`);
+        runnerProjectPaths.push(input.projectPath);
         return {
           pid: 42,
           promise: Promise.resolve({
@@ -238,6 +242,7 @@ describe("Codex vertical slice through AgentRunner", () => {
     context.config.OPENIM_GROUP_BOT_ENABLED = true;
     context.config.OPENIM_GROUP_ALLOWLIST = "group_1";
     context.config.OPENIM_GROUP_SENDER_ALLOWLIST = "bridge_user_1";
+    context.config.OPENIM_GROUP_REQUIRE_BINDING = true;
     const app = await createServer(context, pino({ level: "silent" }));
 
     const deniedGroup = await app.inject({
@@ -288,6 +293,25 @@ describe("Codex vertical slice through AgentRunner", () => {
       reason: "group_message_not_addressed_to_bot"
     });
 
+    const missingBinding = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-group-msg",
+      payload: {
+        sendID: "bridge_user_1",
+        groupID: "group_1",
+        contentType: 101,
+        content: JSON.stringify({ content: "@codex_bot needs binding" })
+      }
+    });
+    expect(missingBinding.statusCode).toBe(200);
+    expect(missingBinding.json().data).toMatchObject({
+      ignored: true,
+      reason: "group_binding_required",
+      groupId: "group_1"
+    });
+
+    context.config.OPENIM_GROUP_PROJECT_BINDINGS = "group_1=/workspace/group-demo";
+
     const webhook = await app.inject({
       method: "POST",
       url: "/webhooks/openim/after-send-single-msg/callbackAfterSendGroupMsgCommand",
@@ -304,6 +328,7 @@ describe("Codex vertical slice through AgentRunner", () => {
     await waitFor(() => context.jobs.getById(jobId)?.status === "succeeded");
 
     expect(runnerCalls).toEqual(["group:group_1:@codex_bot please reply GROUP_ACK"]);
+    expect(runnerProjectPaths).toEqual(["/workspace/group-demo"]);
     expect(context.jobs.getById(jobId)).toMatchObject({
       status: "succeeded",
       outputText: "GROUP_ACK"
@@ -338,6 +363,7 @@ describe("Codex vertical slice through AgentRunner", () => {
       "group:group_1:@codex_bot please reply GROUP_ACK",
       "group:group_1:please continue GROUP_ACK"
     ]);
+    expect(runnerProjectPaths).toEqual(["/workspace/group-demo", "/workspace/group-demo"]);
     expect(context.semanticEvents.getById(context.jobs.getById(quoteJobId)!.semanticEventId!)).toMatchObject({
       metadata: { groupTrigger: "reply_to_bot" }
     });
