@@ -17,6 +17,7 @@ import { createServer } from "../../src/server.js";
 import type { AppContext } from "../../src/app-context.js";
 import type { AgentRunner, RuntimeRunHandle } from "../../src/runtime/runner.js";
 import { OpenAiCompatibleRunner } from "../../src/runtime/openai-compatible.runner.js";
+import { TemplateRunner } from "../../src/runtime/template.runner.js";
 
 const tempDirs: string[] = [];
 
@@ -48,6 +49,7 @@ function createTempContext(
     OPENIM_GROUP_PROJECT_BINDINGS: "",
     OPENIM_GROUP_AUTO_REPLY_POLICY: "mention_or_reply" as const,
     RUNTIME_DEFAULT_KIND: runner.kind,
+    TEMPLATE_RUNTIME_RESPONSE_PREFIX: "TEMPLATE_ACK",
     CODEX_BIN: "codex",
     CODEX_DEFAULT_PROJECT_PATH: "/workspace/demo",
     CODEX_DEFAULT_MODEL: "",
@@ -211,6 +213,52 @@ describe("Codex vertical slice through AgentRunner", () => {
       runtimeKind: "openai_compatible",
       activeSession: { externalSessionId: null },
       latestJob: { externalSessionIdAfter: null }
+    });
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("can run the template runner for local smoke without Codex CLI or model services", async () => {
+    const sentTexts: string[] = [];
+    const runner = new TemplateRunner({ responsePrefix: "LOCAL_SMOKE_ACK" });
+    const context = createTempContext(runner, sentTexts);
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const webhook = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-single-msg",
+      payload: {
+        sendID: "bridge_user_1",
+        recvID: "codex_bot",
+        conversationID: "single:codex_bot:bridge_user_1",
+        contentType: 101,
+        content: JSON.stringify({ content: "please reply TEMPLATE" })
+      }
+    });
+
+    expect(webhook.statusCode).toBe(200);
+    const jobId = webhook.json().data.jobId as string;
+    await waitFor(() => context.jobs.getById(jobId)?.status === "succeeded");
+
+    expect(context.jobs.getById(jobId)).toMatchObject({
+      status: "succeeded",
+      outputText: "LOCAL_SMOKE_ACK: please reply TEMPLATE",
+      codexSessionIdAfter: null
+    });
+    expect(context.runtimeEvents.listByJobId(jobId).map((event) => event.eventType)).toContain(
+      "template.response_completed"
+    );
+    expect(sentTexts).toEqual(["LOCAL_SMOKE_ACK: please reply TEMPLATE"]);
+
+    const runtimeStatus = await app.inject({
+      method: "GET",
+      url: "/api/conversations/single%3Acodex_bot%3Abridge_user_1/runtime-status"
+    });
+    expect(runtimeStatus.json()).toMatchObject({
+      runtimeKind: "template",
+      activeSession: { externalSessionId: null },
+      latestJob: { runtimeKind: "template", externalSessionIdAfter: null }
     });
 
     await app.close();

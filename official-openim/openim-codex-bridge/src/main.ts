@@ -13,6 +13,7 @@ import { SpawnCodexCliAdapter } from "./adapters/codex/codex-cli.adapter.js";
 import { CodexCliRunner } from "./runtime/codex-cli.runner.js";
 import { OpenAiCompatibleRunner } from "./runtime/openai-compatible.runner.js";
 import { OpenHandsRunner } from "./runtime/openhands.runner.js";
+import { TemplateRunner } from "./runtime/template.runner.js";
 import type { AgentRunner } from "./runtime/runner.js";
 import { OpenImAuthClient } from "./adapters/openim/openim-auth.client.js";
 import { OpenImMessageSender } from "./adapters/openim/openim-message.sender.js";
@@ -77,6 +78,11 @@ process.on("SIGTERM", () => {
 await app.listen({ port: config.PORT, host: "0.0.0.0" });
 
 function createRunner(): AgentRunner {
+  if (config.RUNTIME_DEFAULT_KIND === "template") {
+    return new TemplateRunner({
+      responsePrefix: config.TEMPLATE_RUNTIME_RESPONSE_PREFIX
+    });
+  }
   if (config.RUNTIME_DEFAULT_KIND === "openai_compatible") {
     return new OpenAiCompatibleRunner({
       baseUrl: config.OPENAI_COMPATIBLE_BASE_URL,

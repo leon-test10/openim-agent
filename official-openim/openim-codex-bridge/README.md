@@ -130,6 +130,7 @@ OPENIM_GROUP_PROJECT_BINDINGS=
 OPENIM_GROUP_AUTO_REPLY_POLICY=mention_or_reply
 
 RUNTIME_DEFAULT_KIND=codex_cli
+TEMPLATE_RUNTIME_RESPONSE_PREFIX=TEMPLATE_ACK
 
 CODEX_BIN=codex
 CODEX_DEFAULT_PROJECT_PATH=/workspace/openim-demo
@@ -293,6 +294,10 @@ runtime execution is delegated through `AgentRunner`. The production implementat
 `../docs/runtime-runner-boundary.md`.
 
 Phase 4C adds runtime-named API aliases while keeping legacy Codex APIs stable.
+
+Phase 4D0 adds a local `template` runtime for smoke diagnostics. It returns deterministic text,
+emits runtime events, and never calls Codex CLI or an external model service. The default remains
+`codex_cli`; set `RUNTIME_DEFAULT_KIND=template` only for controlled diagnostics.
 
 Phase 4D adds an `openai_compatible` runtime runner for vLLM, Ollama OpenAI-compatible endpoints,
 LM Studio, DeepSeek/OpenAI-compatible APIs, and other `/v1/chat/completions` providers. The default

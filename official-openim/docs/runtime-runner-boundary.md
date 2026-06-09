@@ -22,7 +22,8 @@ export interface AgentRunner {
 ```
 
 Phase 4B introduced `CodexCliRunner`, which wraps the existing `CodexCliAdapter`. Phase 4D adds
-`OpenAiCompatibleRunner` for OpenAI-compatible `/v1/chat/completions` endpoints.
+`OpenAiCompatibleRunner` for OpenAI-compatible `/v1/chat/completions` endpoints. Phase 4D0 adds
+`TemplateRunner` as a deterministic local diagnostics runtime.
 
 ## Codex CLI Mapping
 
@@ -76,6 +77,6 @@ Runtime runners should implement `AgentRunner` without modifying OpenIM webhook 
 - `codex_cli`: call Codex CLI through `SpawnCodexCliAdapter`, maintain external session id.
 - `openai_compatible`: call `/v1/chat/completions`, return final assistant text, no external session in v1.
 - `openhands`: Phase 4E spike stub; recognized by config but returns unsupported until a real REST/API adapter is implemented.
-- Future `template`: deterministic test/runtime stub for diagnostics.
+- `template`: deterministic local smoke/runtime stub for diagnostics.
 
 New runtime session tables and Electron Runtime UI migration belong to later phases.

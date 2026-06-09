@@ -45,6 +45,7 @@ const BRIDGE_META = {
     runtimeProfiles: true,
     runtimeApi: true,
     codexLegacyApi: true,
+    templateRuntime: true,
     openaiCompatibleRuntime: true,
     openHandsRuntime: false,
     conversationEvents: true,

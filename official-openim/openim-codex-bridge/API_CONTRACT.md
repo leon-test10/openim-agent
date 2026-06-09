@@ -317,6 +317,22 @@ returned only when backend policy allows dev/admin visibility.
 
 Read-only runtime-named profile alias. Mutations stay on `/api/runtime-profiles` in Phase 4C.
 
+## Template Runtime
+
+Set `RUNTIME_DEFAULT_KIND=template` to route bridge jobs through a deterministic local runner for
+smoke diagnostics. This runner does not call Codex CLI, OpenAI-compatible APIs, OpenHands, or any
+external process.
+
+Environment:
+
+```env
+TEMPLATE_RUNTIME_RESPONSE_PREFIX=TEMPLATE_ACK
+```
+
+The runner emits `template.request_started`, `template.response_completed`, and
+`template.request_cancelled` runtime events. Successful jobs return
+`{prefix}: {normalized current input}` and have `externalSessionId=null`.
+
 ## OpenAI-Compatible Runtime
 
 Set `RUNTIME_DEFAULT_KIND=openai_compatible` to route bridge jobs to an OpenAI-compatible
