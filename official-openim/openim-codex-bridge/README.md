@@ -144,6 +144,10 @@ OPENAI_COMPATIBLE_TIMEOUT_MS=120000
 OPENAI_COMPATIBLE_TEMPERATURE=0.2
 OPENAI_COMPATIBLE_MAX_TOKENS=2048
 
+OPENHANDS_BASE_URL=http://127.0.0.1:3000
+OPENHANDS_API_KEY=
+OPENHANDS_TIMEOUT_MS=600000
+
 CONTEXT_RECENT_EVENT_LIMIT=30
 CONTEXT_AUTO_SUMMARY_ENABLED=false
 CONTEXT_SUMMARY_EVENT_THRESHOLD=120
@@ -231,6 +235,10 @@ LM Studio, DeepSeek/OpenAI-compatible APIs, and other `/v1/chat/completions` pro
 remains `codex_cli`; set `RUNTIME_DEFAULT_KIND=openai_compatible` to route bridge jobs through the
 OpenAI-compatible runner. This runner is stateless in its first version, so it returns
 `externalSessionId: null`.
+
+Phase 4E adds an `openhands` runner spike stub and documents the adapter contract in
+`../docs/openhands-spike.md`. It is intentionally not production-executable yet; keep
+`RUNTIME_DEFAULT_KIND=codex_cli` or `openai_compatible` for real traffic.
 
 ## Session Model
 

@@ -12,6 +12,7 @@ import { ConversationEventBus } from "./core/conversation-event-bus.js";
 import { SpawnCodexCliAdapter } from "./adapters/codex/codex-cli.adapter.js";
 import { CodexCliRunner } from "./runtime/codex-cli.runner.js";
 import { OpenAiCompatibleRunner } from "./runtime/openai-compatible.runner.js";
+import { OpenHandsRunner } from "./runtime/openhands.runner.js";
 import type { AgentRunner } from "./runtime/runner.js";
 import { OpenImAuthClient } from "./adapters/openim/openim-auth.client.js";
 import { OpenImMessageSender } from "./adapters/openim/openim-message.sender.js";
@@ -84,6 +85,13 @@ function createRunner(): AgentRunner {
       timeoutMs: config.OPENAI_COMPATIBLE_TIMEOUT_MS,
       temperature: config.OPENAI_COMPATIBLE_TEMPERATURE,
       maxTokens: config.OPENAI_COMPATIBLE_MAX_TOKENS
+    });
+  }
+  if (config.RUNTIME_DEFAULT_KIND === "openhands") {
+    return new OpenHandsRunner({
+      baseUrl: config.OPENHANDS_BASE_URL,
+      apiKey: config.OPENHANDS_API_KEY,
+      timeoutMs: config.OPENHANDS_TIMEOUT_MS
     });
   }
   return new CodexCliRunner(codexAdapter);

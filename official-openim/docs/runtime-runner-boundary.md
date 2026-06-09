@@ -75,7 +75,7 @@ Runtime runners should implement `AgentRunner` without modifying OpenIM webhook 
 
 - `codex_cli`: call Codex CLI through `SpawnCodexCliAdapter`, maintain external session id.
 - `openai_compatible`: call `/v1/chat/completions`, return final assistant text, no external session in v1.
-- Future `openhands`: submit a task to OpenHands REST/API layer and map its events to `runtime_events`.
+- `openhands`: Phase 4E spike stub; recognized by config but returns unsupported until a real REST/API adapter is implemented.
 - Future `template`: deterministic test/runtime stub for diagnostics.
 
 New runtime session tables and Electron Runtime UI migration belong to later phases.

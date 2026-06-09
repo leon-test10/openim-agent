@@ -36,7 +36,7 @@ Returns UI state for one OpenIM conversation:
 
 Runtime-named equivalent for new clients. Returns:
 
-- `runtimeKind`, currently `codex_cli` or `openai_compatible`
+- `runtimeKind`, currently `codex_cli`, `openai_compatible`, or spike-only `openhands`
 - `activeSession` as `RuntimeSessionView`
 - `activeJob`, `latestJob`, and `recentJobs` as runtime job views
 - `queuedJobCount`
@@ -238,6 +238,20 @@ OPENAI_COMPATIBLE_MAX_TOKENS=2048
 
 The first implementation is stateless: `externalSessionId`, `runtimeHomeDir`, and Codex resume
 fields are not used by this runner.
+
+## OpenHands Spike
+
+`RUNTIME_DEFAULT_KIND=openhands` is recognized for Phase 4E spike work, but the current
+`OpenHandsRunner` intentionally returns `ok: false` and does not submit remote tasks. See
+`../docs/openhands-spike.md` for the required adapter contract before enabling real execution.
+
+Environment:
+
+```env
+OPENHANDS_BASE_URL=http://127.0.0.1:3000
+OPENHANDS_API_KEY=
+OPENHANDS_TIMEOUT_MS=600000
+```
 
 `POST /api/runtime-profiles`
 
