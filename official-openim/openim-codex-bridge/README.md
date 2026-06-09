@@ -328,6 +328,8 @@ Phase 5G adds a read-only group policy preview endpoint for deployment verificat
 whether a candidate group callback would create a runtime job, while preserving the no-side-effect
 boundary used by metadata diagnostics.
 
+Manual group-flow verification steps are tracked in `../docs/phase5-group-bot-baseline.md`.
+
 ## Session Model
 
 The bridge supports one OpenIM conversation with multiple Codex session records. Only one record is active at a time.
