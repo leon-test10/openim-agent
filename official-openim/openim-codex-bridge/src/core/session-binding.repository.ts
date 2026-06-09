@@ -85,13 +85,13 @@ export class SessionBindingRepository {
           `
           INSERT INTO codex_session_records (
             id, openim_conversation_id, openim_display_user_id, codex_session_id,
-            codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode, runtime_profile_id,
+            codex_project_path, codex_home_dir, runtime_home_dir, codex_home_seed_mode, sandbox_mode, runtime_profile_id,
             display_name, display_name_source, last_summary,
             is_active, status, parent_session_record_id,
             forked_from_codex_session_id, created_reason, created_at, updated_at
           ) VALUES (
             @id, @openimConversationId, @openimDisplayUserId, NULL,
-            @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode, @runtimeProfileId,
+            @codexProjectPath, @codexHomeDir, @codexHomeDir, @codexHomeSeedMode, @sandboxMode, @runtimeProfileId,
             @displayName, @displayNameSource, @lastSummary,
             1, 'active', NULL,
             NULL, 'auto_created_from_openim_message', @createdAt, @updatedAt
@@ -196,13 +196,13 @@ export class SessionBindingRepository {
         `
         INSERT INTO codex_session_records (
           id, openim_conversation_id, openim_display_user_id, codex_session_id,
-          codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode, runtime_profile_id,
+          codex_project_path, codex_home_dir, runtime_home_dir, codex_home_seed_mode, sandbox_mode, runtime_profile_id,
           display_name, display_name_source, last_summary,
           is_active, status, parent_session_record_id,
           forked_from_codex_session_id, created_reason, created_at, updated_at
         ) VALUES (
           @id, @openimConversationId, @openimDisplayUserId, NULL,
-          @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode, @runtimeProfileId,
+          @codexProjectPath, @codexHomeDir, @codexHomeDir, @codexHomeSeedMode, @sandboxMode, @runtimeProfileId,
           @displayName, @displayNameSource, @lastSummary,
           0, 'active', NULL,
           NULL, 'manual_new_session', @createdAt, @updatedAt
@@ -245,14 +245,14 @@ export class SessionBindingRepository {
         .prepare(
           `
           INSERT INTO codex_session_records (
-            id, openim_conversation_id, openim_display_user_id, codex_session_id,
-            codex_project_path, codex_home_dir, codex_home_seed_mode, sandbox_mode, runtime_profile_id,
+            id, openim_conversation_id, openim_display_user_id, codex_session_id, external_session_id,
+            codex_project_path, codex_home_dir, runtime_home_dir, codex_home_seed_mode, sandbox_mode, runtime_profile_id,
             display_name, display_name_source, last_summary,
             is_active, status, parent_session_record_id,
             forked_from_codex_session_id, created_reason, created_at, updated_at
           ) VALUES (
-            @id, @openimConversationId, @openimDisplayUserId, @codexSessionId,
-            @codexProjectPath, @codexHomeDir, @codexHomeSeedMode, @sandboxMode, @runtimeProfileId,
+            @id, @openimConversationId, @openimDisplayUserId, @codexSessionId, @codexSessionId,
+            @codexProjectPath, @codexHomeDir, @codexHomeDir, @codexHomeSeedMode, @sandboxMode, @runtimeProfileId,
             @displayName, @displayNameSource, @lastSummary,
             1, 'active', @parentSessionRecordId,
             @forkedFromCodexSessionId, 'manual_rebind', @createdAt, @updatedAt
@@ -391,11 +391,13 @@ export class SessionBindingRepository {
       .prepare(
         `
         UPDATE codex_session_records
-        SET codex_session_id = ?, updated_at = ?
+        SET codex_session_id = ?,
+            external_session_id = ?,
+            updated_at = ?
         WHERE id = ?
       `
       )
-      .run(codexSessionId, Date.now(), sessionRecordId);
+      .run(codexSessionId, codexSessionId, Date.now(), sessionRecordId);
   }
 
   updateDisplayName(sessionRecordId: string, displayName: string): CodexSessionRecord | null {
@@ -452,6 +454,7 @@ export class SessionBindingRepository {
         `
         UPDATE codex_session_records
         SET codex_home_dir = @codexHomeDir,
+            runtime_home_dir = @codexHomeDir,
             codex_home_seed_mode = @codexHomeSeedMode,
             sandbox_mode = @sandboxMode,
             updated_at = @updatedAt

@@ -42,6 +42,32 @@ Phase 4B intentionally does not rename tables or public API fields:
 
 `AppContext.codex` is retained as a legacy test/compatibility seam. Production construction now creates a `CodexCliRunner` from the existing `SpawnCodexCliAdapter`.
 
+## Phase 4C Runtime API Compatibility
+
+Phase 4C adds runtime-named API aliases without removing legacy Codex API fields:
+
+- `GET /api/conversations/:conversationId/runtime-status`
+- `GET /api/conversations/:conversationId/runtime-sessions`
+- `POST /api/conversations/:conversationId/runtime-sessions`
+- `POST /api/conversations/:conversationId/runtime-sessions/:sessionRecordId/activate`
+- `PATCH /api/conversations/:conversationId/runtime-sessions/:sessionRecordId`
+- `POST /api/conversations/:conversationId/runtime-sessions/:sessionRecordId/archive`
+- `GET /api/runtime/jobs/:jobId`
+- `GET /api/runtime/jobs/:jobId/events`
+- `GET /api/runtime/jobs/:jobId/events/stream`
+- `POST /api/runtime/jobs/:jobId/cancel`
+- `POST /api/runtime/jobs/:jobId/retry`
+- `GET /api/runtime/profiles`
+
+The compatibility view maps current Codex-backed fields into runtime names:
+
+- `codex_session_id` -> `externalSessionId`
+- `codex_project_path` -> `projectPath`
+- `codex_home_dir` -> `runtimeHomeDir`
+- `codex_session_id_before/after` -> `externalSessionIdBefore/After`
+
+The database keeps `codex_session_records` as the source table and adds compatibility columns for later migration: `runtime_kind`, `external_session_id`, `runtime_home_dir`, and `runtime_config_json`.
+
 ## Future Runtime Implementations
 
 Future runners should implement `AgentRunner` without modifying OpenIM webhook ingestion, job repositories, or OpenIM reply writing:
@@ -50,4 +76,4 @@ Future runners should implement `AgentRunner` without modifying OpenIM webhook i
 - `openhands`: submit a task to OpenHands REST/API layer and map its events to `runtime_events`.
 - `template`: deterministic test/runtime stub for diagnostics.
 
-Runtime API naming, new runtime session tables, and Electron Runtime UI migration belong to later phases.
+New runtime session tables and Electron Runtime UI migration belong to later phases.

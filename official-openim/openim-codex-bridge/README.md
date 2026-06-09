@@ -253,13 +253,24 @@ GET /api/jobs/:jobId/events
 GET /api/jobs/:jobId/events/stream
 POST /api/jobs/:jobId/cancel
 POST /api/jobs/:jobId/retry
+GET /api/runtime/jobs/:jobId
+GET /api/runtime/jobs/:jobId/events
+GET /api/runtime/jobs/:jobId/events/stream
+POST /api/runtime/jobs/:jobId/cancel
+POST /api/runtime/jobs/:jobId/retry
 GET /api/conversations/:conversationId/status
+GET /api/conversations/:conversationId/runtime-status
 GET /api/conversations/:conversationId/events/stream
 GET /api/conversations/:conversationId/semantic-events
 GET /api/conversations/:conversationId/context/preview
 GET /api/conversations/:conversationId/context/summary
 POST /api/conversations/:conversationId/context/summarize
 GET /api/conversations/:conversationId/codex-sessions
+GET /api/conversations/:conversationId/runtime-sessions
+POST /api/conversations/:conversationId/runtime-sessions
+POST /api/conversations/:conversationId/runtime-sessions/:sessionRecordId/activate
+PATCH /api/conversations/:conversationId/runtime-sessions/:sessionRecordId
+POST /api/conversations/:conversationId/runtime-sessions/:sessionRecordId/archive
 POST /api/conversations/:conversationId/codex-sessions
 POST /api/conversations/:conversationId/codex-sessions/:sessionRecordId/activate
 PATCH /api/conversations/:conversationId/codex-sessions/:sessionRecordId
@@ -268,6 +279,7 @@ POST /api/conversations/:conversationId/codex-sessions/:sessionRecordId/restore
 DELETE /api/conversations/:conversationId/codex-sessions/:sessionRecordId
 GET /api/conversations/:conversationId/codex-sessions/:sessionRecordId/diagnostics
 POST /api/conversations/:conversationId/openim-history-snapshots
+GET /api/runtime/profiles
 GET /api/runtime-profiles
 POST /api/runtime-profiles
 PATCH /api/runtime-profiles/:profileId
@@ -276,6 +288,23 @@ POST /api/runtime-profiles/:profileId/test
 ```
 
 The detailed Electron-facing API contract is tracked in `API_CONTRACT.md`.
+
+### Phase 4C Runtime API compatibility
+
+The bridge now exposes runtime-named API aliases while keeping the legacy Codex API stable for existing Electron clients.
+
+- `runtimeKind` is currently `codex_cli`.
+- Runtime session views map `externalSessionId` to the legacy `codexSessionId`.
+- Runtime session views map `projectPath` to `codexProjectPath` and `runtimeHomeDir` to `codexHomeDir`.
+- Runtime job views expose `externalSessionIdBefore/After` while retaining legacy Codex fields under `legacyCodex`.
+- `/api/runtime/jobs/:jobId/events` is equivalent to `/api/jobs/:jobId/events` with `runtimeKind` metadata.
+- `/api/runtime/profiles` is a read alias for `/api/runtime-profiles`; mutation stays on the existing profile API in this phase.
+
+Legacy routes remain supported:
+
+- `/api/conversations/:conversationId/codex-sessions`
+- `/api/conversations/:conversationId/status`
+- `/api/jobs/:jobId/*`
 
 List active OpenIM conversation bindings:
 

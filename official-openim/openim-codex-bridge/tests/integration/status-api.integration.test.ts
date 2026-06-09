@@ -112,7 +112,9 @@ describe("status API", () => {
         sessionMetadata: true,
         sessionActivate: true,
         sessionRename: true,
-        sessionArchive: true
+        sessionArchive: true,
+        runtimeApi: true,
+        codexLegacyApi: true
       }
     });
 
@@ -186,6 +188,53 @@ describe("status API", () => {
       recentJobs: [{ id: job.id, status: "succeeded", canRetry: false }]
     });
 
+    const runtimeStatus = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/runtime-status`
+    });
+    expect(runtimeStatus.statusCode).toBe(200);
+    expect(runtimeStatus.json()).toMatchObject({
+      openimConversationId: event.openimConversationId,
+      runtimeKind: "codex_cli",
+      state: "completed",
+      activeSession: {
+        id: session.id,
+        runtimeKind: "codex_cli",
+        externalSessionId: "thread_1",
+        projectPath: "/workspace/demo",
+        legacyCodex: { codexSessionId: "thread_1" }
+      },
+      latestJob: {
+        id: job.id,
+        runtimeKind: "codex_cli",
+        status: "succeeded",
+        externalSessionIdBefore: "thread_1",
+        externalSessionIdAfter: "thread_1"
+      },
+      recentJobs: [{ id: job.id, runtimeKind: "codex_cli", status: "succeeded" }]
+    });
+
+    const runtimeJob = await app.inject({
+      method: "GET",
+      url: `/api/runtime/jobs/${job.id}`
+    });
+    expect(runtimeJob.statusCode).toBe(200);
+    expect(runtimeJob.json()).toMatchObject({
+      id: job.id,
+      runtimeKind: "codex_cli",
+      externalSessionIdBefore: "thread_1",
+      externalSessionIdAfter: "thread_1"
+    });
+
+    const legacyEvents = await app.inject({ method: "GET", url: `/api/jobs/${job.id}/events` });
+    const runtimeEvents = await app.inject({ method: "GET", url: `/api/runtime/jobs/${job.id}/events` });
+    expect(runtimeEvents.statusCode).toBe(200);
+    expect(runtimeEvents.json()).toMatchObject({
+      jobId: job.id,
+      runtimeKind: "codex_cli",
+      events: legacyEvents.json().events
+    });
+
     await app.close();
     context.db.close();
   });
@@ -208,6 +257,22 @@ describe("status API", () => {
       recentJobs: [],
       queuedJobCount: 0,
       pendingHistoryImport: null
+    });
+
+    const runtimeStatus = await app.inject({
+      method: "GET",
+      url: "/api/conversations/missing/runtime-status"
+    });
+    expect(runtimeStatus.statusCode).toBe(200);
+    expect(runtimeStatus.json()).toMatchObject({
+      openimConversationId: "missing",
+      runtimeKind: "codex_cli",
+      state: "unknown",
+      activeSession: null,
+      activeJob: null,
+      latestJob: null,
+      recentJobs: [],
+      queuedJobCount: 0
     });
 
     const binding = await app.inject({
@@ -443,6 +508,94 @@ describe("status API", () => {
           displayNameSource: "manual",
           status: "archived"
         })
+      ])
+    );
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("exposes runtime session lifecycle aliases without breaking legacy session records", async () => {
+    const context = createTempContext();
+    context.semanticEvents.insert(event);
+    const original = context.sessions.getOrCreateActiveSession({
+      openimConversationId: event.openimConversationId,
+      openimDisplayUserId: "user_1",
+      codexProjectPath: "/workspace/demo",
+      displayName: "Original session"
+    });
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/runtime-sessions`,
+      payload: {
+        openimDisplayUserId: "user_1",
+        projectPath: "/workspace/new",
+        displayName: "Runtime facade session"
+      }
+    });
+    expect(created.statusCode).toBe(201);
+    const createdBody = created.json();
+    expect(createdBody).toMatchObject({
+      openimConversationId: event.openimConversationId,
+      openimDisplayUserId: "user_1",
+      runtimeKind: "codex_cli",
+      projectPath: "/workspace/new",
+      legacyCodex: { codexProjectPath: "/workspace/new" },
+      isActive: true,
+      status: "active"
+    });
+    expect(context.sessions.getById(original.id)?.isActive).toBe(false);
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/runtime-sessions/${createdBody.id}`,
+      payload: { displayName: "Runtime facade renamed" }
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toMatchObject({
+      id: createdBody.id,
+      runtimeKind: "codex_cli",
+      displayName: "Runtime facade renamed"
+    });
+
+    const listed = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/runtime-sessions`
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({
+      conversationId: event.openimConversationId,
+      runtimeKind: "codex_cli"
+    });
+    expect(listed.json().sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: createdBody.id, runtimeKind: "codex_cli", projectPath: "/workspace/new" }),
+        expect.objectContaining({ id: original.id, runtimeKind: "codex_cli", projectPath: "/workspace/demo" })
+      ])
+    );
+
+    const archived = await app.inject({
+      method: "POST",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/runtime-sessions/${createdBody.id}/archive`
+    });
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json()).toMatchObject({
+      id: createdBody.id,
+      runtimeKind: "codex_cli",
+      isActive: false,
+      status: "archived"
+    });
+
+    const legacySessions = await app.inject({
+      method: "GET",
+      url: `/api/conversations/${encodeURIComponent(event.openimConversationId)}/codex-sessions`
+    });
+    expect(legacySessions.statusCode).toBe(200);
+    expect(legacySessions.json().sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: createdBody.id, codexProjectPath: "/workspace/new", status: "archived" })
       ])
     );
 

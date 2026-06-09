@@ -11,6 +11,7 @@ import { buildCodexRuntimeArgs, buildCodexRuntimeEnv, runCodexRuntimeProbe } fro
 import { CodexCliRunner } from "./runtime/codex-cli.runner.js";
 import { CodexRunnerWorker } from "./workers/codex-runner.worker.js";
 import { deriveConversationState, toRuntimeJobView } from "./core/conversation-status.js";
+import { toRuntimeJobApiView, toRuntimeSessionView } from "./core/runtime-api-view.js";
 import type { RuntimeProfileInput } from "./core/runtime-profile.js";
 import { ConversationEventBus, type ConversationStreamEvent } from "./core/conversation-event-bus.js";
 import { SemanticEventIngestService } from "./core/semantic-event-ingest.service.js";
@@ -40,6 +41,10 @@ const BRIDGE_META = {
     jobCancel: true,
     jobRetry: true,
     runtimeProfiles: true,
+    runtimeApi: true,
+    codexLegacyApi: true,
+    openaiCompatibleRuntime: false,
+    openHandsRuntime: false,
     conversationEvents: true,
     sessionResumeDiagnostics: true,
     openimHistoryImport: true,
@@ -70,6 +75,15 @@ export async function createServer(context: AppContext, logger: Logger) {
     const includeDeleted = parseBooleanQuery((request.query as { includeDeleted?: string }).includeDeleted);
     const policy = runtimeProfilePolicyForRequest(context, request.headers);
     return {
+      profiles: context.runtimeProfiles.list({ includeDeleted }).map((profile) => redactRuntimeProfileForPolicy(profile, policy))
+    };
+  });
+
+  app.get("/api/runtime/profiles", async (request) => {
+    const includeDeleted = parseBooleanQuery((request.query as { includeDeleted?: string }).includeDeleted);
+    const policy = runtimeProfilePolicyForRequest(context, request.headers);
+    return {
+      runtimeKind: "codex_cli",
       profiles: context.runtimeProfiles.list({ includeDeleted }).map((profile) => redactRuntimeProfileForPolicy(profile, policy))
     };
   });
@@ -338,6 +352,15 @@ export async function createServer(context: AppContext, logger: Logger) {
     return job;
   });
 
+  app.get("/api/runtime/jobs/:jobId", async (request, reply) => {
+    const { jobId } = request.params as { jobId: string };
+    const job = context.jobs.getById(jobId);
+    if (!job) {
+      return reply.notFound("runtime job not found");
+    }
+    return toRuntimeJobApiView(toRuntimeJobView(job));
+  });
+
   app.get("/api/jobs/:jobId/events", async (request, reply) => {
     const { jobId } = request.params as { jobId: string };
     const job = context.jobs.getById(jobId);
@@ -350,6 +373,20 @@ export async function createServer(context: AppContext, logger: Logger) {
         ? context.runtimeEvents.listByJobIdAfter(jobId, after)
         : context.runtimeEvents.listByJobId(jobId);
     return { jobId, events };
+  });
+
+  app.get("/api/runtime/jobs/:jobId/events", async (request, reply) => {
+    const { jobId } = request.params as { jobId: string };
+    const job = context.jobs.getById(jobId);
+    if (!job) {
+      return reply.notFound("runtime job not found");
+    }
+    const after = Number((request.query as { after?: string }).after ?? 0);
+    const events =
+      Number.isFinite(after) && after > 0
+        ? context.runtimeEvents.listByJobIdAfter(jobId, after)
+        : context.runtimeEvents.listByJobId(jobId);
+    return { jobId, runtimeKind: "codex_cli", events };
   });
 
   app.get("/api/jobs/:jobId/events/stream", async (request, reply) => {
@@ -382,6 +419,47 @@ export async function createServer(context: AppContext, logger: Logger) {
       if (latestJob && !["queued", "running", "cancelling"].includes(latestJob.status)) {
         reply.raw.write("event: done\n");
         reply.raw.write(`data: ${JSON.stringify({ jobId, status: latestJob.status })}\n\n`);
+        clearInterval(timer);
+        reply.raw.end();
+      }
+    };
+
+    const timer = setInterval(sendPendingEvents, 1000);
+    request.raw.on("close", () => clearInterval(timer));
+    sendPendingEvents();
+    return reply;
+  });
+
+  app.get("/api/runtime/jobs/:jobId/events/stream", async (request, reply) => {
+    const { jobId } = request.params as { jobId: string };
+    const job = context.jobs.getById(jobId);
+    if (!job) {
+      return reply.notFound("runtime job not found");
+    }
+    let lastSequence = Number((request.query as { after?: string }).after ?? 0);
+    if (!Number.isFinite(lastSequence) || lastSequence < 0) {
+      lastSequence = 0;
+    }
+
+    reply.raw.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+      "access-control-allow-origin": "*"
+    });
+
+    const sendPendingEvents = () => {
+      const events = context.runtimeEvents.listByJobIdAfter(jobId, lastSequence);
+      for (const event of events) {
+        lastSequence = event.sequence;
+        reply.raw.write(`id: ${event.sequence}\n`);
+        reply.raw.write("event: runtime_event\n");
+        reply.raw.write(`data: ${JSON.stringify({ runtimeKind: "codex_cli", ...event })}\n\n`);
+      }
+      const latestJob = context.jobs.getById(jobId);
+      if (latestJob && !["queued", "running", "cancelling"].includes(latestJob.status)) {
+        reply.raw.write("event: done\n");
+        reply.raw.write(`data: ${JSON.stringify({ jobId, runtimeKind: "codex_cli", status: latestJob.status })}\n\n`);
         clearInterval(timer);
         reply.raw.end();
       }
@@ -431,6 +509,15 @@ export async function createServer(context: AppContext, logger: Logger) {
     return job;
   });
 
+  app.post("/api/runtime/jobs/:jobId/cancel", async (request, reply) => {
+    const { jobId } = request.params as { jobId: string };
+    const job = await worker.cancelJob(jobId);
+    if (!job) {
+      return reply.notFound("runtime job not found");
+    }
+    return toRuntimeJobApiView(toRuntimeJobView(job));
+  });
+
   app.post("/api/jobs/:jobId/retry", async (request, reply) => {
     const { jobId } = request.params as { jobId: string };
     const source = context.jobs.getById(jobId);
@@ -450,6 +537,27 @@ export async function createServer(context: AppContext, logger: Logger) {
       });
     }
     return reply.code(201).send(retry);
+  });
+
+  app.post("/api/runtime/jobs/:jobId/retry", async (request, reply) => {
+    const { jobId } = request.params as { jobId: string };
+    const source = context.jobs.getById(jobId);
+    if (!source) {
+      return reply.notFound("runtime job not found");
+    }
+    if (source.status === "queued" || source.status === "running" || source.status === "cancelling") {
+      return bridgeApiError(reply, 409, "job_active", "Only failed, cancelled, or completed jobs can be retried.", {
+        sourceJob: toRuntimeJobApiView(toRuntimeJobView(source))
+      });
+    }
+
+    const retry = worker.retryJob(jobId);
+    if (!retry) {
+      return bridgeApiError(reply, 409, "retry_unavailable", "Retry requires an active session and the original semantic event.", {
+        sourceJob: toRuntimeJobApiView(toRuntimeJobView(source))
+      });
+    }
+    return reply.code(201).send(toRuntimeJobApiView(toRuntimeJobView(retry)));
   });
 
   app.get("/api/bindings", async () => {
@@ -580,6 +688,27 @@ export async function createServer(context: AppContext, logger: Logger) {
     };
   });
 
+  app.get("/api/conversations/:conversationId/runtime-status", async (request) => {
+    const { conversationId: rawConversationId } = request.params as { conversationId: string };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const activeSession = context.sessions.getActiveByConversationId(conversationId);
+    const activeJob = context.jobs.getActiveByConversationId(conversationId);
+    const latestJob = context.jobs.getLatestByConversationId(conversationId);
+    const recentJobs = context.jobs.listRecentByConversationId(conversationId, 10);
+
+    return {
+      openimConversationId: conversationId,
+      runtimeKind: "codex_cli",
+      state: deriveConversationState({ activeSession, activeJob, latestJob }),
+      activeSession: toRuntimeSessionView(activeSession),
+      activeJob: toRuntimeJobApiView(toRuntimeJobView(activeJob)),
+      latestJob: toRuntimeJobApiView(toRuntimeJobView(latestJob)),
+      recentJobs: recentJobs.map((job) => toRuntimeJobApiView(toRuntimeJobView(job))),
+      queuedJobCount: context.jobs.countQueuedByConversationId(conversationId),
+      pendingHistoryImport: context.openimHistory.getPendingByConversationId(conversationId)
+    };
+  });
+
   app.get("/api/conversations/:conversationId/codex-sessions", async (request) => {
     const { conversationId: rawConversationId } = request.params as { conversationId: string };
     const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
@@ -590,6 +719,20 @@ export async function createServer(context: AppContext, logger: Logger) {
         includeArchived: parseBooleanQuery(query.includeArchived, true),
         includeDeleted: parseBooleanQuery(query.includeDeleted)
       })
+    };
+  });
+
+  app.get("/api/conversations/:conversationId/runtime-sessions", async (request) => {
+    const { conversationId: rawConversationId } = request.params as { conversationId: string };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const query = request.query as { includeArchived?: string; includeDeleted?: string };
+    return {
+      conversationId,
+      runtimeKind: "codex_cli",
+      sessions: context.sessions.listByConversationId(conversationId, {
+        includeArchived: parseBooleanQuery(query.includeArchived, true),
+        includeDeleted: parseBooleanQuery(query.includeDeleted)
+      }).map(toRuntimeSessionView)
     };
   });
 
@@ -751,6 +894,41 @@ export async function createServer(context: AppContext, logger: Logger) {
     return reply.code(201).send(activated);
   });
 
+  app.post("/api/conversations/:conversationId/runtime-sessions", async (request, reply) => {
+    const { conversationId: rawConversationId } = request.params as { conversationId: string };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const body = isRecord(request.body) ? request.body : {};
+    const active = context.sessions.getActiveByConversationId(conversationId);
+    const displayUserId =
+      optionalString(body.openimDisplayUserId) ?? active?.openimDisplayUserId ?? optionalString(body.userId);
+    if (!displayUserId) {
+      return reply.badRequest("openimDisplayUserId is required when the conversation is unknown");
+    }
+
+    const project = validateRequestedProjectPath(
+      context,
+      optionalString(body.projectPath) ?? optionalString(body.codexProjectPath) ?? active?.codexProjectPath ?? context.config.CODEX_DEFAULT_PROJECT_PATH
+    );
+    if (!project.ok) {
+      return bridgeApiError(reply, 400, "project_path_not_allowed", "Project path is outside the configured workspace allowlist.", {
+        diagnostics: project.diagnostics
+      });
+    }
+
+    const session = context.sessions.createAdditionalSession({
+      openimConversationId: conversationId,
+      openimDisplayUserId: displayUserId,
+      codexProjectPath: project.normalizedPath!,
+      runtimeProfileId: optionalString(body.runtimeProfileId) ?? active?.runtimeProfileId ?? null,
+      displayName: summarizeUserText(optionalString(body.displayName) ?? "New session"),
+      lastSummary: summarizeUserText(optionalString(body.displayName) ?? "Manual new session", 120)
+    });
+    const activated = context.sessions.activateSession(conversationId, session.id);
+    conversationEvents.publishSessionChanged(conversationId, activated, "manual_new_runtime_session");
+    conversationEvents.publishBindingChanged(conversationId, { activeSession: activated, reason: "manual_new_runtime_session" });
+    return reply.code(201).send(toRuntimeSessionView(activated));
+  });
+
   app.post("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/activate", async (request, reply) => {
     const { conversationId: rawConversationId, sessionRecordId } = request.params as {
       conversationId: string;
@@ -778,6 +956,33 @@ export async function createServer(context: AppContext, logger: Logger) {
     return activated;
   });
 
+  app.post("/api/conversations/:conversationId/runtime-sessions/:sessionRecordId/activate", async (request, reply) => {
+    const { conversationId: rawConversationId, sessionRecordId } = request.params as {
+      conversationId: string;
+      sessionRecordId: string;
+    };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const activeJob = context.jobs.getActiveByConversationId(conversationId);
+    if (activeJob) {
+      return bridgeApiError(reply, 409, "active_job_exists", "Cannot activate a session while a runtime job is queued, running, or cancelling.", {
+        activeJob: toRuntimeJobApiView(toRuntimeJobView(activeJob))
+      });
+    }
+    const session = context.sessions.getById(sessionRecordId);
+    if (!session || session.openimConversationId !== conversationId) {
+      return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
+    }
+    if (session.status === "archived") {
+      return bridgeApiError(reply, 409, "session_archived", "Archived sessions cannot be activated.", {
+        session: toRuntimeSessionView(session)
+      });
+    }
+    const activated = context.sessions.activateSession(conversationId, sessionRecordId);
+    conversationEvents.publishSessionChanged(conversationId, activated, "manual_runtime_activate");
+    conversationEvents.publishBindingChanged(conversationId, { activeSession: activated, reason: "manual_runtime_activate" });
+    return toRuntimeSessionView(activated);
+  });
+
   app.patch("/api/conversations/:conversationId/codex-sessions/:sessionRecordId", async (request, reply) => {
     const { conversationId: rawConversationId, sessionRecordId } = request.params as {
       conversationId: string;
@@ -796,6 +1001,26 @@ export async function createServer(context: AppContext, logger: Logger) {
     const updated = context.sessions.updateDisplayName(sessionRecordId, displayName);
     conversationEvents.publishSessionChanged(conversationId, updated, "manual_rename");
     return updated;
+  });
+
+  app.patch("/api/conversations/:conversationId/runtime-sessions/:sessionRecordId", async (request, reply) => {
+    const { conversationId: rawConversationId, sessionRecordId } = request.params as {
+      conversationId: string;
+      sessionRecordId: string;
+    };
+    const body = isRecord(request.body) ? request.body : {};
+    const displayName = optionalString(body.displayName);
+    if (!displayName) {
+      return bridgeApiError(reply, 400, "display_name_required", "displayName is required.");
+    }
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const session = context.sessions.getById(sessionRecordId);
+    if (!session || session.openimConversationId !== conversationId) {
+      return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
+    }
+    const updated = context.sessions.updateDisplayName(sessionRecordId, displayName);
+    conversationEvents.publishSessionChanged(conversationId, updated, "manual_runtime_rename");
+    return toRuntimeSessionView(updated);
   });
 
   app.post("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/archive", async (request, reply) => {
@@ -817,6 +1042,27 @@ export async function createServer(context: AppContext, logger: Logger) {
     conversationEvents.publishSessionChanged(conversationId, archived, "manual_archive");
     conversationEvents.publishBindingChanged(conversationId, { session: archived, reason: "manual_archive" });
     return archived;
+  });
+
+  app.post("/api/conversations/:conversationId/runtime-sessions/:sessionRecordId/archive", async (request, reply) => {
+    const { conversationId: rawConversationId, sessionRecordId } = request.params as {
+      conversationId: string;
+      sessionRecordId: string;
+    };
+    const conversationId = normalizeOpenImConversationId(rawConversationId, context.config.OPENIM_BOT_USER_ID);
+    const activeJob = context.jobs.getActiveByConversationId(conversationId);
+    if (activeJob) {
+      return bridgeApiError(reply, 409, "active_job_exists", "Cannot archive a session while a runtime job is queued, running, or cancelling.", {
+        activeJob: toRuntimeJobApiView(toRuntimeJobView(activeJob))
+      });
+    }
+    const archived = context.sessions.archiveSession(conversationId, sessionRecordId);
+    if (!archived) {
+      return bridgeApiError(reply, 404, "session_not_found", "Session record not found.");
+    }
+    conversationEvents.publishSessionChanged(conversationId, archived, "manual_runtime_archive");
+    conversationEvents.publishBindingChanged(conversationId, { session: archived, reason: "manual_runtime_archive" });
+    return toRuntimeSessionView(archived);
   });
 
   app.post("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/restore", async (request, reply) => {

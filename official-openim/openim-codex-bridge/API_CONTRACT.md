@@ -15,7 +15,8 @@ Returns bridge name, version, `apiVersion`, capabilities, `runtimePolicy`, and
 `projectPathPolicy.allowlist`.
 
 Capabilities include Phase 4 `semanticContext` when the bridge supports semantic event import,
-context preview, and manual summary endpoints.
+context preview, and manual summary endpoints. Phase 4C also exposes `runtimeApi` and
+`codexLegacyApi`.
 
 ## Conversations
 
@@ -28,6 +29,16 @@ Returns UI state for one OpenIM conversation:
 - `activeJob`
 - `latestJob`
 - `recentJobs`
+- `queuedJobCount`
+- `pendingHistoryImport`
+
+`GET /api/conversations/:conversationId/runtime-status`
+
+Runtime-named equivalent for new clients. Returns:
+
+- `runtimeKind`, currently `codex_cli`
+- `activeSession` as `RuntimeSessionView`
+- `activeJob`, `latestJob`, and `recentJobs` as runtime job views
 - `queuedJobCount`
 - `pendingHistoryImport`
 
@@ -97,22 +108,50 @@ Archives the active binding. Rejected with `409 active_job_exists` while active 
 
 Lists session records.
 
+`GET /api/conversations/:conversationId/runtime-sessions?includeArchived=true&includeDeleted=false`
+
+Lists session records as runtime views. Runtime view field mapping:
+
+- `runtimeKind`: currently `codex_cli`
+- `externalSessionId`: legacy `codexSessionId`
+- `projectPath`: legacy `codexProjectPath`
+- `runtimeHomeDir`: legacy `codexHomeDir`
+- `legacyCodex`: original Codex-specific fields retained for migration/debugging
+
 `POST /api/conversations/:conversationId/codex-sessions`
 
 Creates and activates a new session record. Body accepts `openimDisplayUserId`, `codexProjectPath`,
 `displayName`, and `runtimeProfileId`. `codexProjectPath` is backend allowlist validated.
 
+`POST /api/conversations/:conversationId/runtime-sessions`
+
+Creates and activates a new runtime session view. Body accepts `openimDisplayUserId`, `projectPath`
+or `codexProjectPath`, `displayName`, and `runtimeProfileId`. The project path is backend allowlist
+validated.
+
 `POST /api/conversations/:conversationId/codex-sessions/:sessionRecordId/activate`
 
 Activates an existing non-archived session.
+
+`POST /api/conversations/:conversationId/runtime-sessions/:sessionRecordId/activate`
+
+Runtime-named activation alias. Rejected with `409 active_job_exists` while active work exists.
 
 `PATCH /api/conversations/:conversationId/codex-sessions/:sessionRecordId`
 
 Renames a session. Body: `{ "displayName": "..." }`.
 
+`PATCH /api/conversations/:conversationId/runtime-sessions/:sessionRecordId`
+
+Runtime-named rename alias. Body: `{ "displayName": "..." }`.
+
 `POST /api/conversations/:conversationId/codex-sessions/:sessionRecordId/archive`
 
 Archives a session.
+
+`POST /api/conversations/:conversationId/runtime-sessions/:sessionRecordId/archive`
+
+Runtime-named archive alias. Rejected with `409 active_job_exists` while active work exists.
 
 `POST /api/conversations/:conversationId/codex-sessions/:sessionRecordId/restore`
 
@@ -132,22 +171,43 @@ Returns resume diagnostics plus `projectPathValidation` diagnostics.
 
 Returns one runtime job.
 
+`GET /api/runtime/jobs/:jobId`
+
+Returns one runtime job view. Adds `runtimeKind`, `externalSessionIdBefore`,
+`externalSessionIdAfter`, and `legacyCodex`.
+
 `GET /api/jobs/:jobId/events?after=0`
 
 Returns persisted runtime events for one job.
+
+`GET /api/runtime/jobs/:jobId/events?after=0`
+
+Runtime-named equivalent with `runtimeKind` metadata.
 
 `GET /api/jobs/:jobId/events/stream?after=0`
 
 Legacy job-level SSE retained for compatibility. New Electron code should prefer conversation-level
 SSE.
 
+`GET /api/runtime/jobs/:jobId/events/stream?after=0`
+
+Runtime-named job event SSE equivalent.
+
 `POST /api/jobs/:jobId/cancel`
 
 Cancels queued/running jobs. Terminal jobs are returned unchanged.
 
+`POST /api/runtime/jobs/:jobId/cancel`
+
+Runtime-named cancel alias.
+
 `POST /api/jobs/:jobId/retry`
 
 Creates a retry job from a terminal source job.
+
+`POST /api/runtime/jobs/:jobId/retry`
+
+Runtime-named retry alias.
 
 ## Runtime Profiles
 
@@ -155,6 +215,10 @@ Creates a retry job from a terminal source job.
 
 Lists profiles. `apiKey` is never returned. `apiKeyMasked` may be returned. `codexHomeOverride` is
 returned only when backend policy allows dev/admin visibility.
+
+`GET /api/runtime/profiles?includeDeleted=false`
+
+Read-only runtime-named profile alias. Mutations stay on `/api/runtime-profiles` in Phase 4C.
 
 `POST /api/runtime-profiles`
 

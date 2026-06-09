@@ -70,8 +70,12 @@ function migrate(db: BridgeDatabase): void {
       openim_conversation_id TEXT NOT NULL,
       openim_display_user_id TEXT NOT NULL,
       codex_session_id TEXT,
+      runtime_kind TEXT NOT NULL DEFAULT 'codex_cli',
+      external_session_id TEXT,
       codex_project_path TEXT NOT NULL,
       codex_home_dir TEXT,
+      runtime_home_dir TEXT,
+      runtime_config_json TEXT,
       codex_home_seed_mode TEXT,
       sandbox_mode TEXT,
       runtime_profile_id TEXT,
@@ -193,6 +197,10 @@ function migrate(db: BridgeDatabase): void {
   ensureColumn(db, "codex_session_records", "codex_home_seed_mode", "TEXT");
   ensureColumn(db, "codex_session_records", "sandbox_mode", "TEXT");
   ensureColumn(db, "codex_session_records", "runtime_profile_id", "TEXT");
+  ensureColumn(db, "codex_session_records", "runtime_kind", "TEXT NOT NULL DEFAULT 'codex_cli'");
+  ensureColumn(db, "codex_session_records", "external_session_id", "TEXT");
+  ensureColumn(db, "codex_session_records", "runtime_home_dir", "TEXT");
+  ensureColumn(db, "codex_session_records", "runtime_config_json", "TEXT");
   ensureColumn(db, "codex_session_records", "display_name", "TEXT");
   ensureColumn(db, "codex_session_records", "display_name_source", "TEXT");
   ensureColumn(db, "codex_session_records", "last_summary", "TEXT");
