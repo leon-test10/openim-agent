@@ -266,6 +266,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     const session = context.sessions.getOrCreateActiveSession({
       openimConversationId: event.openimConversationId,
       openimDisplayUserId: event.senderUserId,
+      runtimeKind: activeRuntimeKind(context),
       codexProjectPath: project.normalizedPath!,
       displayName: summarizeUserText(event.text),
       lastSummary: summarizeUserText(event.text, 120)
@@ -335,6 +336,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     const session = context.sessions.getOrCreateActiveSession({
       openimConversationId: event.openimConversationId,
       openimDisplayUserId: event.groupId ?? event.senderUserId,
+      runtimeKind: activeRuntimeKind(context),
       codexProjectPath: project.normalizedPath!,
       displayName: summarizeUserText(event.text),
       lastSummary: summarizeUserText(event.text, 120)
@@ -421,6 +423,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     const session = context.sessions.getOrCreateActiveSession({
       openimConversationId: event.openimConversationId,
       openimDisplayUserId: event.senderUserId,
+      runtimeKind: activeRuntimeKind(context),
       codexProjectPath: project.normalizedPath!,
       displayName: summarizeUserText(event.text),
       lastSummary: summarizeUserText(event.text, 120)
@@ -728,6 +731,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     const session = context.sessions.rebindConversation({
       openimConversationId: conversationId,
       openimDisplayUserId,
+      runtimeKind: activeRuntimeKind(context),
       codexProjectPath: project.normalizedPath!,
       codexSessionId: optionalString(body.codexSessionId),
       runtimeProfileId: optionalString(body.runtimeProfileId) ?? activeSession?.runtimeProfileId ?? null,
@@ -988,6 +992,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     const session = context.sessions.createAdditionalSession({
       openimConversationId: conversationId,
       openimDisplayUserId: displayUserId,
+      runtimeKind: activeRuntimeKind(context),
       codexProjectPath: project.normalizedPath!,
       runtimeProfileId: optionalString(body.runtimeProfileId) ?? active?.runtimeProfileId ?? null,
       displayName: summarizeUserText(optionalString(body.displayName) ?? "New session"),
@@ -1023,6 +1028,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     const session = context.sessions.createAdditionalSession({
       openimConversationId: conversationId,
       openimDisplayUserId: displayUserId,
+      runtimeKind: activeRuntimeKind(context),
       codexProjectPath: project.normalizedPath!,
       runtimeProfileId: optionalString(body.runtimeProfileId) ?? active?.runtimeProfileId ?? null,
       displayName: summarizeUserText(optionalString(body.displayName) ?? "New session"),

@@ -55,6 +55,7 @@ describe("repositories", () => {
     const session = sessions.getOrCreateActiveSession({
       openimConversationId: "single:codex_bot:user_1",
       openimDisplayUserId: "user_1",
+      runtimeKind: "openai_compatible",
       codexProjectPath: "/workspace/demo"
     });
     const sameSession = sessions.getOrCreateActiveSession({
@@ -65,6 +66,8 @@ describe("repositories", () => {
 
     expect(sameSession.id).toBe(session.id);
     expect(session.isActive).toBe(true);
+    expect(session.runtimeKind).toBe("openai_compatible");
+    expect(sessions.getById(session.id)?.runtimeKind).toBe("openai_compatible");
     expect(session.codexSessionId).toBeNull();
     expect(session.codexHomeDir).toContain("openim-codex-bridge-test-homes");
     expect(session.codexHomeDir).toContain(session.id);

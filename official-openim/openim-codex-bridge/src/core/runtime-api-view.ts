@@ -51,19 +51,20 @@ export interface RuntimeConversationStatusView {
 
 export function toRuntimeSessionView(
   session: CodexSessionRecord | null,
-  runtimeKind: RuntimeKind = "codex_cli"
+  runtimeKind?: RuntimeKind
 ): RuntimeSessionView | null {
   if (!session) {
     return null;
   }
+  const viewRuntimeKind = runtimeKind ?? session.runtimeKind;
   return {
     id: session.id,
     openimConversationId: session.openimConversationId,
     openimDisplayUserId: session.openimDisplayUserId,
-    runtimeKind,
-    externalSessionId: runtimeKind === "codex_cli" ? session.codexSessionId : null,
+    runtimeKind: viewRuntimeKind,
+    externalSessionId: viewRuntimeKind === "codex_cli" ? session.codexSessionId : null,
     projectPath: session.codexProjectPath,
-    runtimeHomeDir: runtimeKind === "codex_cli" ? session.codexHomeDir : null,
+    runtimeHomeDir: viewRuntimeKind === "codex_cli" ? session.codexHomeDir : null,
     displayName: session.displayName,
     lastSummary: session.lastSummary,
     isActive: session.isActive,

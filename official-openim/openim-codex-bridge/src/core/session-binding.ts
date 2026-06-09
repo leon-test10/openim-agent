@@ -1,5 +1,6 @@
 export interface CodexSessionRecord {
   id: string;
+  runtimeKind: "codex_cli" | "template" | "openai_compatible" | "openhands";
   openimConversationId: string;
   openimDisplayUserId: string;
   codexSessionId: string | null;

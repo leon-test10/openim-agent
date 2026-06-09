@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import type { RuntimeKind } from "../runtime/runtime-types.js";
 import type { BridgeDatabase } from "../storage/db.js";
 import { createId } from "../utils/ids.js";
 import type { BindingSummary } from "./conversation-status.js";
@@ -6,6 +7,7 @@ import type { CodexSessionRecord } from "./session-binding.js";
 
 interface SessionRow {
   id: string;
+  runtime_kind: RuntimeKind;
   openim_conversation_id: string;
   openim_display_user_id: string;
   codex_session_id: string | null;
@@ -30,6 +32,7 @@ export interface GetOrCreateActiveSessionInput {
   openimConversationId: string;
   openimDisplayUserId: string;
   codexProjectPath: string;
+  runtimeKind?: RuntimeKind;
   displayName?: string | null;
   lastSummary?: string | null;
   runtimeProfileId?: string | null;
@@ -84,13 +87,13 @@ export class SessionBindingRepository {
         .prepare(
           `
           INSERT INTO codex_session_records (
-            id, openim_conversation_id, openim_display_user_id, codex_session_id,
+            id, runtime_kind, openim_conversation_id, openim_display_user_id, codex_session_id,
             codex_project_path, codex_home_dir, runtime_home_dir, codex_home_seed_mode, sandbox_mode, runtime_profile_id,
             display_name, display_name_source, last_summary,
             is_active, status, parent_session_record_id,
             forked_from_codex_session_id, created_reason, created_at, updated_at
           ) VALUES (
-            @id, @openimConversationId, @openimDisplayUserId, NULL,
+            @id, @runtimeKind, @openimConversationId, @openimDisplayUserId, NULL,
             @codexProjectPath, @codexHomeDir, @codexHomeDir, @codexHomeSeedMode, @sandboxMode, @runtimeProfileId,
             @displayName, @displayNameSource, @lastSummary,
             1, 'active', NULL,
@@ -100,6 +103,7 @@ export class SessionBindingRepository {
         )
         .run({
           id,
+          runtimeKind: input.runtimeKind ?? "codex_cli",
           openimConversationId: input.openimConversationId,
           openimDisplayUserId: input.openimDisplayUserId,
           codexProjectPath: input.codexProjectPath,
@@ -195,13 +199,13 @@ export class SessionBindingRepository {
       .prepare(
         `
         INSERT INTO codex_session_records (
-          id, openim_conversation_id, openim_display_user_id, codex_session_id,
+          id, runtime_kind, openim_conversation_id, openim_display_user_id, codex_session_id,
           codex_project_path, codex_home_dir, runtime_home_dir, codex_home_seed_mode, sandbox_mode, runtime_profile_id,
           display_name, display_name_source, last_summary,
           is_active, status, parent_session_record_id,
           forked_from_codex_session_id, created_reason, created_at, updated_at
         ) VALUES (
-          @id, @openimConversationId, @openimDisplayUserId, NULL,
+          @id, @runtimeKind, @openimConversationId, @openimDisplayUserId, NULL,
           @codexProjectPath, @codexHomeDir, @codexHomeDir, @codexHomeSeedMode, @sandboxMode, @runtimeProfileId,
           @displayName, @displayNameSource, @lastSummary,
           0, 'active', NULL,
@@ -211,6 +215,7 @@ export class SessionBindingRepository {
       )
       .run({
         id,
+        runtimeKind: input.runtimeKind ?? "codex_cli",
         openimConversationId: input.openimConversationId,
         openimDisplayUserId: input.openimDisplayUserId,
         codexProjectPath: input.codexProjectPath,
@@ -245,13 +250,13 @@ export class SessionBindingRepository {
         .prepare(
           `
           INSERT INTO codex_session_records (
-            id, openim_conversation_id, openim_display_user_id, codex_session_id, external_session_id,
+            id, runtime_kind, openim_conversation_id, openim_display_user_id, codex_session_id, external_session_id,
             codex_project_path, codex_home_dir, runtime_home_dir, codex_home_seed_mode, sandbox_mode, runtime_profile_id,
             display_name, display_name_source, last_summary,
             is_active, status, parent_session_record_id,
             forked_from_codex_session_id, created_reason, created_at, updated_at
           ) VALUES (
-            @id, @openimConversationId, @openimDisplayUserId, @codexSessionId, @codexSessionId,
+            @id, @runtimeKind, @openimConversationId, @openimDisplayUserId, @codexSessionId, @codexSessionId,
             @codexProjectPath, @codexHomeDir, @codexHomeDir, @codexHomeSeedMode, @sandboxMode, @runtimeProfileId,
             @displayName, @displayNameSource, @lastSummary,
             1, 'active', @parentSessionRecordId,
@@ -261,6 +266,7 @@ export class SessionBindingRepository {
         )
         .run({
           id,
+          runtimeKind: input.runtimeKind ?? "codex_cli",
           openimConversationId: input.openimConversationId,
           openimDisplayUserId: input.openimDisplayUserId,
           codexSessionId: input.codexSessionId ?? null,
@@ -514,6 +520,7 @@ export class SessionBindingRepository {
 function mapSessionRow(row: SessionRow): CodexSessionRecord {
   return {
     id: row.id,
+    runtimeKind: row.runtime_kind ?? "codex_cli",
     openimConversationId: row.openim_conversation_id,
     openimDisplayUserId: row.openim_display_user_id,
     codexSessionId: row.codex_session_id,

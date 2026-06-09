@@ -418,6 +418,7 @@ The bridge now exposes runtime-named API aliases while keeping the legacy Codex 
 - `runtimeKind` reflects the active bridge runtime: `codex_cli`, `template`, `openai_compatible`, or spike-only `openhands`.
 - Runtime session views map `externalSessionId` to the legacy `codexSessionId`.
 - Runtime session views map `projectPath` to `codexProjectPath` and `runtimeHomeDir` to `codexHomeDir`.
+- New session records persist their creation-time runtime kind in `codex_session_records.runtime_kind`.
 - Runtime job views expose `externalSessionIdBefore/After` while retaining legacy Codex fields under `legacyCodex`.
 - `/api/runtime/jobs/:jobId/events` is equivalent to `/api/jobs/:jobId/events` with `runtimeKind` metadata.
 - `/api/runtime/profiles` is a read alias for `/api/runtime-profiles`; mutation stays on the existing profile API in this phase.

@@ -23,7 +23,7 @@ npm test
 Latest fresh results:
 
 - `npm run build`: passed.
-- `npm test`: passed, 91 tests across 18 test files after Phase 5G and template runtime edits.
+- `npm test`: passed, 93 tests across 19 test files after Phase 5G and runtime metadata edits.
 
 ## OpenIM Docker / Bootstrap Status
 

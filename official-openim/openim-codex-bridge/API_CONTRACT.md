@@ -215,6 +215,10 @@ Lists session records as runtime views. Runtime view field mapping:
 - `runtimeHomeDir`: legacy `codexHomeDir`
 - `legacyCodex`: original Codex-specific fields retained for migration/debugging
 
+New session records persist their creation-time `runtimeKind` in `codex_session_records.runtime_kind`.
+Runtime views normally report the active bridge runtime, while the stored field remains available on
+legacy session objects for migration/debugging.
+
 `POST /api/conversations/:conversationId/codex-sessions`
 
 Creates and activates a new session record. Body accepts `openimDisplayUserId`, `codexProjectPath`,
