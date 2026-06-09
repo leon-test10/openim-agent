@@ -118,6 +118,12 @@ const event: SemanticEvent = {
 describe("status API", () => {
   it("exposes bridge metadata and capabilities", async () => {
     const context = createTempContext();
+    context.config.OPENIM_GROUP_BOT_ENABLED = true;
+    context.config.OPENIM_GROUP_ALLOWLIST = "group_1;group_2";
+    context.config.OPENIM_GROUP_SENDER_ALLOWLIST = "user_1";
+    context.config.OPENIM_GROUP_REQUIRE_BINDING = true;
+    context.config.OPENIM_GROUP_PROJECT_BINDINGS = "group_1=/workspace/demo";
+    context.config.OPENIM_GROUP_AUTO_REPLY_POLICY = "mention_only";
     const app = await createServer(context, pino({ level: "silent" }));
 
     const meta = await app.inject({ method: "GET", url: "/api/meta" });
@@ -131,8 +137,17 @@ describe("status API", () => {
         sessionArchive: true,
         runtimeApi: true,
         codexLegacyApi: true
+      },
+      groupBotPolicy: {
+        enabled: true,
+        autoReplyPolicy: "mention_only",
+        groupAllowlist: ["group_1", "group_2"],
+        senderAllowlist: ["user_1"],
+        requireBinding: true,
+        boundGroups: ["group_1"]
       }
     });
+    expect(JSON.stringify(meta.json().groupBotPolicy)).not.toContain("/workspace/demo");
 
     const health = await app.inject({ method: "GET", url: "/healthz" });
     expect(health.statusCode).toBe(200);

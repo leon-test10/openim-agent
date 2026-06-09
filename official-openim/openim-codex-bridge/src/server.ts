@@ -1209,6 +1209,14 @@ function buildBridgeMeta(context: AppContext, headers: HeaderBag) {
     runtimePolicy: runtimeProfilePolicyForRequest(context, headers),
     projectPathPolicy: {
       allowlist: parseProjectPathAllowlist(context.config.CODEX_WORKSPACE_ALLOWLIST, context.config.CODEX_DEFAULT_PROJECT_PATH)
+    },
+    groupBotPolicy: {
+      enabled: context.config.OPENIM_GROUP_BOT_ENABLED,
+      autoReplyPolicy: context.config.OPENIM_GROUP_AUTO_REPLY_POLICY,
+      groupAllowlist: parseConfigList(context.config.OPENIM_GROUP_ALLOWLIST),
+      senderAllowlist: parseConfigList(context.config.OPENIM_GROUP_SENDER_ALLOWLIST),
+      requireBinding: context.config.OPENIM_GROUP_REQUIRE_BINDING,
+      boundGroups: Array.from(parseConfigMap(context.config.OPENIM_GROUP_PROJECT_BINDINGS).keys())
     }
   };
 }

@@ -250,6 +250,10 @@ Phase 5E adds backend group auto-reply policy:
 
 This remains a backend policy; no Codex controls are added to OpenIM native settings.
 
+`GET /api/meta` and `/healthz` expose read-only `groupBotPolicy` diagnostics so deployments can
+verify the active group policy. The diagnostics include enabled state, allowlists, required binding,
+auto-reply policy, and bound group ids. They intentionally do not return group project paths.
+
 ## Semantic Context Policy
 
 Codex CLI remains the primary runtime context manager. The bridge does not replace Codex resume,
@@ -311,6 +315,9 @@ and deployments can require such bindings before group messages create runtime j
 
 Phase 5E adds backend group auto-reply policy so deployments can restrict runtime job creation to
 mentions, quote/replies, both, or neither.
+
+Phase 5F adds read-only group policy diagnostics to bridge metadata without exposing bound
+workspace paths.
 
 ## Session Model
 

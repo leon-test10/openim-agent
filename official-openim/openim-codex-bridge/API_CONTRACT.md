@@ -18,6 +18,17 @@ Capabilities include Phase 4 `semanticContext` when the bridge supports semantic
 context preview, and manual summary endpoints. Phase 4C also exposes `runtimeApi` and
 `codexLegacyApi`. Phase 4D exposes `openaiCompatibleRuntime`.
 
+`GET /api/meta` also returns read-only `groupBotPolicy` diagnostics:
+
+- `enabled`
+- `autoReplyPolicy`
+- `groupAllowlist`
+- `senderAllowlist`
+- `requireBinding`
+- `boundGroups`
+
+`boundGroups` lists group ids only; group binding project paths are not returned in metadata.
+
 ## OpenIM Webhooks
 
 `POST /webhooks/openim/after-send-single-msg`
