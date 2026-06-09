@@ -396,6 +396,7 @@ export class CodexRunnerWorker {
     codexSessionId: string | null,
     text: string
   ): Promise<void> {
+    const runtimeKind = this.runner.kind;
     this.recordRuntimeEvent(jobId, sessionRecordId, event.openimConversationId, {
       type: "openim.reply_started",
       textLength: text.length
@@ -406,7 +407,7 @@ export class CodexRunnerWorker {
         recvId: event.senderUserId,
         groupId: event.groupId,
         text,
-        metadata: { jobId, sessionRecordId, codexSessionId }
+        metadata: { jobId, sessionRecordId, codexSessionId, runtimeKind }
       });
       this.context.semanticEvents.upsert({
         id: createId("evt"),
@@ -431,10 +432,10 @@ export class CodexRunnerWorker {
         contentType: 101,
         text,
         timestamp: Date.now(),
-        metadata: { jobId, sessionRecordId, codexSessionId },
+        metadata: { jobId, sessionRecordId, codexSessionId, runtimeKind },
         dedupKey: `bridge_reply:${jobId}`,
-        ex: { agent: { generated_by: "codex" } },
-        rawPayload: { jobId, sessionRecordId, codexSessionId },
+        ex: { agent: { generated_by: "codex", runtime: runtimeKind } },
+        rawPayload: { jobId, sessionRecordId, codexSessionId, runtimeKind },
         createdAt: Date.now()
       });
       this.recordRuntimeEvent(jobId, sessionRecordId, event.openimConversationId, {

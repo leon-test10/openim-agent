@@ -1,4 +1,5 @@
 import type { AppConfig } from "../../config/env.js";
+import type { RuntimeKind } from "../../runtime/runtime-types.js";
 import type { OpenImAuthClient } from "./openim-auth.client.js";
 
 export interface SendBotTextInput {
@@ -10,6 +11,7 @@ export interface SendBotTextInput {
     jobId: string;
     sessionRecordId: string;
     codexSessionId: string | null;
+    runtimeKind?: RuntimeKind;
   };
 }
 
@@ -39,7 +41,7 @@ export class OpenImMessageSender {
         ex: JSON.stringify({
           agent: {
             generated_by: "codex",
-            runtime: "codex_cli",
+            runtime: input.metadata.runtimeKind ?? "codex_cli",
             job_id: input.metadata.jobId,
             binding_id: input.metadata.sessionRecordId,
             codex_session_id: input.metadata.codexSessionId

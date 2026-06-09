@@ -249,6 +249,16 @@ describe("Codex vertical slice through AgentRunner", () => {
     expect(context.runtimeEvents.listByJobId(jobId).map((event) => event.eventType)).toContain(
       "template.response_completed"
     );
+    expect(context.semanticEvents.listByConversationId("single:codex_bot:bridge_user_1")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          text: "LOCAL_SMOKE_ACK: please reply TEMPLATE",
+          metadata: expect.objectContaining({ runtimeKind: "template" }),
+          ex: { agent: { generated_by: "codex", runtime: "template" } }
+        })
+      ])
+    );
     expect(sentTexts).toEqual(["LOCAL_SMOKE_ACK: please reply TEMPLATE"]);
 
     const runtimeStatus = await app.inject({
