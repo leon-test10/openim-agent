@@ -84,16 +84,17 @@ export function toRuntimeSessionView(
 
 export function toRuntimeJobApiView(
   job: RuntimeJobView | null,
-  runtimeKind: RuntimeKind = "codex_cli"
+  runtimeKind?: RuntimeKind
 ): RuntimeJobApiView | null {
   if (!job) {
     return null;
   }
+  const viewRuntimeKind = runtimeKind ?? job.runtimeKind;
   return {
     ...job,
-    runtimeKind,
-    externalSessionIdBefore: runtimeKind === "codex_cli" ? job.codexSessionIdBefore : null,
-    externalSessionIdAfter: runtimeKind === "codex_cli" ? job.codexSessionIdAfter : null,
+    runtimeKind: viewRuntimeKind,
+    externalSessionIdBefore: viewRuntimeKind === "codex_cli" ? job.codexSessionIdBefore : null,
+    externalSessionIdAfter: viewRuntimeKind === "codex_cli" ? job.codexSessionIdAfter : null,
     legacyCodex: {
       codexSessionIdBefore: job.codexSessionIdBefore,
       codexSessionIdAfter: job.codexSessionIdAfter

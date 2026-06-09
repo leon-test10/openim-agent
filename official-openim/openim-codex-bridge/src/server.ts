@@ -272,6 +272,7 @@ export async function createServer(context: AppContext, logger: Logger) {
       lastSummary: summarizeUserText(event.text, 120)
     });
     const job = context.jobs.createQueuedJob({
+      runtimeKind: activeRuntimeKind(context),
       sessionRecordId: session.id,
       semanticEventId: event.id,
       openimConversationId: event.openimConversationId,
@@ -342,6 +343,7 @@ export async function createServer(context: AppContext, logger: Logger) {
       lastSummary: summarizeUserText(event.text, 120)
     });
     const job = context.jobs.createQueuedJob({
+      runtimeKind: activeRuntimeKind(context),
       sessionRecordId: session.id,
       semanticEventId: event.id,
       openimConversationId: event.openimConversationId,
@@ -429,6 +431,7 @@ export async function createServer(context: AppContext, logger: Logger) {
       lastSummary: summarizeUserText(event.text, 120)
     });
     const job = context.jobs.createQueuedJob({
+      runtimeKind: activeRuntimeKind(context),
       sessionRecordId: session.id,
       semanticEventId: event.id,
       openimConversationId: event.openimConversationId,

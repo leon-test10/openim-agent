@@ -69,6 +69,8 @@ The compatibility view maps current Codex-backed fields into runtime names:
 - `codex_session_id_before/after` -> `externalSessionIdBefore/After`
 
 The database keeps `codex_session_records` as the source table and adds compatibility columns for later migration: `runtime_kind`, `external_session_id`, `runtime_home_dir`, and `runtime_config_json`.
+Runtime jobs also persist `runtime_kind` so status/history APIs can report the runtime used when the
+job was created, even after the bridge default runtime changes.
 
 ## Runtime Implementations
 

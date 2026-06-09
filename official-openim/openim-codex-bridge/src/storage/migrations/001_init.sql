@@ -81,6 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_codex_session_records_conversation
 
 CREATE TABLE IF NOT EXISTS runtime_jobs (
   id TEXT PRIMARY KEY,
+  runtime_kind TEXT NOT NULL DEFAULT 'codex_cli',
   session_record_id TEXT NOT NULL,
   semantic_event_id TEXT NOT NULL,
   openim_conversation_id TEXT NOT NULL,

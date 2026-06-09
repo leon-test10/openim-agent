@@ -128,6 +128,7 @@ function migrate(db: BridgeDatabase): void {
 
     CREATE TABLE IF NOT EXISTS runtime_jobs (
       id TEXT PRIMARY KEY,
+      runtime_kind TEXT NOT NULL DEFAULT 'codex_cli',
       session_record_id TEXT NOT NULL,
       semantic_event_id TEXT NOT NULL,
       openim_conversation_id TEXT NOT NULL,
@@ -193,6 +194,7 @@ function migrate(db: BridgeDatabase): void {
   ensureColumn(db, "runtime_jobs", "cancel_method", "TEXT");
   ensureColumn(db, "runtime_jobs", "failure_reason", "TEXT");
   ensureColumn(db, "runtime_jobs", "retry_of_job_id", "TEXT");
+  ensureColumn(db, "runtime_jobs", "runtime_kind", "TEXT NOT NULL DEFAULT 'codex_cli'");
   ensureColumn(db, "codex_session_records", "codex_home_dir", "TEXT");
   ensureColumn(db, "codex_session_records", "codex_home_seed_mode", "TEXT");
   ensureColumn(db, "codex_session_records", "sandbox_mode", "TEXT");

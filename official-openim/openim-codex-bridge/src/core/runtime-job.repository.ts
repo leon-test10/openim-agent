@@ -1,9 +1,11 @@
 import type { BridgeDatabase } from "../storage/db.js";
+import type { RuntimeKind } from "../runtime/runtime-types.js";
 import { createId } from "../utils/ids.js";
 import type { RuntimeJob } from "./runtime-job.js";
 
 interface RuntimeJobRow {
   id: string;
+  runtime_kind: RuntimeKind;
   session_record_id: string;
   semantic_event_id: string;
   openim_conversation_id: string;
@@ -28,6 +30,7 @@ export interface CreateQueuedJobInput {
   semanticEventId: string;
   openimConversationId: string;
   inputText: string;
+  runtimeKind?: RuntimeKind;
   codexSessionIdBefore: string | null;
   retryOfJobId?: string | null;
 }
@@ -41,15 +44,21 @@ export class RuntimeJobRepository {
       .prepare(
         `
         INSERT INTO runtime_jobs (
-          id, session_record_id, semantic_event_id, openim_conversation_id,
+          id, runtime_kind, session_record_id, semantic_event_id, openim_conversation_id,
           status, input_text, codex_session_id_before, retry_of_job_id, created_at
         ) VALUES (
-          @id, @sessionRecordId, @semanticEventId, @openimConversationId,
+          @id, @runtimeKind, @sessionRecordId, @semanticEventId, @openimConversationId,
           'queued', @inputText, @codexSessionIdBefore, @retryOfJobId, @createdAt
         )
       `
       )
-      .run({ ...input, id, retryOfJobId: input.retryOfJobId ?? null, createdAt: Date.now() });
+      .run({
+        ...input,
+        id,
+        runtimeKind: input.runtimeKind ?? "codex_cli",
+        retryOfJobId: input.retryOfJobId ?? null,
+        createdAt: Date.now()
+      });
     return this.getById(id)!;
   }
 
@@ -220,6 +229,7 @@ export class RuntimeJobRepository {
       semanticEventId: source.semanticEventId,
       openimConversationId: source.openimConversationId,
       inputText: source.inputText,
+      runtimeKind: source.runtimeKind,
       codexSessionIdBefore: input.codexSessionIdBefore,
       retryOfJobId: source.id
     });
@@ -229,6 +239,7 @@ export class RuntimeJobRepository {
 function mapRuntimeJobRow(row: RuntimeJobRow): RuntimeJob {
   return {
     id: row.id,
+    runtimeKind: row.runtime_kind ?? "codex_cli",
     sessionRecordId: row.session_record_id,
     semanticEventId: row.semantic_event_id,
     openimConversationId: row.openim_conversation_id,

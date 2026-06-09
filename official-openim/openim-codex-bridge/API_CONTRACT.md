@@ -277,6 +277,10 @@ Returns one runtime job.
 Returns one runtime job view. Adds `runtimeKind`, `externalSessionIdBefore`,
 `externalSessionIdAfter`, and `legacyCodex`.
 
+New runtime jobs persist their creation-time `runtimeKind` in `runtime_jobs.runtime_kind`, and retry
+jobs copy the source job runtime kind. Runtime job views can therefore report historical job runtime
+kind even after the bridge default runtime changes.
+
 `GET /api/jobs/:jobId/events?after=0`
 
 Returns persisted runtime events for one job.

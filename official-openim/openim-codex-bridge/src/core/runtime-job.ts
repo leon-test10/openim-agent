@@ -1,5 +1,6 @@
 export interface RuntimeJob {
   id: string;
+  runtimeKind: "codex_cli" | "template" | "openai_compatible" | "openhands";
   sessionRecordId: string;
   semanticEventId: string;
   openimConversationId: string;

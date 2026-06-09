@@ -79,6 +79,7 @@ describe("repositories", () => {
       semanticEventId: semanticEvent.id,
       openimConversationId: semanticEvent.openimConversationId,
       inputText: "hello",
+      runtimeKind: "openai_compatible",
       codexSessionIdBefore: null
     });
     jobs.markRunning(job.id, 1100);
@@ -90,6 +91,7 @@ describe("repositories", () => {
     sessions.updateCodexSessionId(session.id, "11111111-1111-1111-1111-111111111111");
 
     expect(jobs.getById(job.id)?.status).toBe("succeeded");
+    expect(jobs.getById(job.id)?.runtimeKind).toBe("openai_compatible");
     expect(jobs.getById(job.id)?.failureReason).toBeNull();
     expect(sessions.getActiveByConversationId("single:codex_bot:user_1")?.codexSessionId).toBe(
       "11111111-1111-1111-1111-111111111111"
@@ -239,6 +241,7 @@ describe("repositories", () => {
       semanticEventId: semanticEvent.id,
       openimConversationId: semanticEvent.openimConversationId,
       inputText: "retry me",
+      runtimeKind: "template",
       codexSessionIdBefore: "thread_1"
     });
     jobs.markRunning(failed.id, 1100);
@@ -261,6 +264,7 @@ describe("repositories", () => {
     });
     expect(retry).toMatchObject({
       status: "queued",
+      runtimeKind: "template",
       retryOfJobId: failed.id,
       inputText: "retry me",
       semanticEventId: semanticEvent.id,
