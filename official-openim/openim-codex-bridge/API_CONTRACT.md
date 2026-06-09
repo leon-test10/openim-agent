@@ -91,6 +91,30 @@ return `group_message_not_addressed_to_bot`.
 
 Compatibility route for suffixed OpenIM group callback command paths.
 
+## Group Policy Diagnostics
+
+`POST /api/group-policy/preview`
+
+Read-only diagnostic endpoint for a candidate OpenIM `afterSendGroupMsg` payload. The request body
+may be the raw callback payload or `{ "payload": { ... } }`.
+
+The endpoint reuses the production group parser, trigger policy, allowlist policy, group binding
+policy, and project path allowlist validation, but it does not write `semantic_events`, create
+runtime jobs, send OpenIM replies, or call any runtime.
+
+Response fields:
+
+- `wouldCreateJob`: whether the same payload would reach runtime job creation under current policy.
+- `reason`: `would_create_job`, an agent decision reason such as `group_sender_not_allowed`, a
+  binding reason such as `group_binding_required`, or `project_path_not_allowed`.
+- `decision`: the direct `shouldCreateRuntimeJob` result.
+- `event`: parsed group conversation, group, sender, content type, event type, and trigger metadata.
+- `policy`: whether group bot, allowlists, auto-reply policy, and binding requirement are configured.
+- `binding`: whether binding was evaluated, whether the group has a configured binding, and whether
+  the default project would be used.
+- `projectPathPolicy`: redacted allowlist validation result. It reports boolean diagnostics and
+  reasons only; configured project paths are not returned.
+
 ## Conversations
 
 `GET /api/conversations/:conversationId/status`

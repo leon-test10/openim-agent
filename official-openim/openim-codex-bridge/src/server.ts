@@ -50,7 +50,8 @@ const BRIDGE_META = {
     conversationEvents: true,
     sessionResumeDiagnostics: true,
     openimHistoryImport: true,
-    semanticContext: true
+    semanticContext: true,
+    groupPolicyPreview: true
   }
 } as const;
 
@@ -72,6 +73,25 @@ export async function createServer(context: AppContext, logger: Logger) {
 
   app.get("/healthz", async (request) => ({ ok: true, ...buildBridgeMeta(context, request.headers) }));
   app.get("/api/meta", async (request) => buildBridgeMeta(context, request.headers));
+
+  app.post("/api/group-policy/preview", async (request, reply) => {
+    const body = isRecord(request.body) ? request.body : {};
+    const payload = isRecord(body.payload) ? body.payload : body;
+    if (!isRecord(payload)) {
+      return bridgeApiError(reply, 400, "openim_payload_required", "A group OpenIM callback payload is required.");
+    }
+
+    let event: SemanticEvent;
+    try {
+      event = parseAfterSendGroupMsgPayload(payload, {
+        botUserId: context.config.OPENIM_BOT_USER_ID
+      });
+    } catch (error) {
+      return bridgeApiError(reply, 400, "openim_payload_invalid", error instanceof Error ? error.message : String(error));
+    }
+
+    return buildGroupPolicyPreview(context, event);
+  });
 
   app.get("/api/runtime-profiles", async (request) => {
     const includeDeleted = parseBooleanQuery((request.query as { includeDeleted?: string }).includeDeleted);
@@ -1190,6 +1210,72 @@ export async function createServer(context: AppContext, logger: Logger) {
   });
 
   return app;
+}
+
+function buildGroupPolicyPreview(context: AppContext, event: SemanticEvent) {
+  const groupAllowlist = parseConfigList(context.config.OPENIM_GROUP_ALLOWLIST);
+  const groupSenderAllowlist = parseConfigList(context.config.OPENIM_GROUP_SENDER_ALLOWLIST);
+  const decision = shouldCreateRuntimeJob(event, {
+    botUserId: context.config.OPENIM_BOT_USER_ID,
+    groupBotEnabled: context.config.OPENIM_GROUP_BOT_ENABLED,
+    groupAllowlist,
+    groupSenderAllowlist,
+    groupAutoReplyPolicy: context.config.OPENIM_GROUP_AUTO_REPLY_POLICY
+  });
+  const bindings = parseConfigMap(context.config.OPENIM_GROUP_PROJECT_BINDINGS);
+  const binding = decision.shouldRun ? resolveGroupProjectPath(context, event.groupId) : null;
+  const project = binding?.ok ? validateRequestedProjectPath(context, binding.projectPath) : null;
+  const wouldCreateJob = decision.shouldRun && Boolean(binding?.ok) && Boolean(project?.ok);
+  const reason = decision.shouldRun
+    ? binding?.ok
+      ? project?.ok
+        ? "would_create_job"
+        : "project_path_not_allowed"
+      : binding?.reason
+    : decision.reason;
+
+  return {
+    wouldCreateJob,
+    reason,
+    decision,
+    event: {
+      openimConversationId: event.openimConversationId,
+      groupId: event.groupId,
+      senderUserId: event.senderUserId,
+      contentType: event.contentType,
+      eventType: event.eventType,
+      metadata: event.metadata ?? {}
+    },
+    policy: {
+      groupBotEnabled: context.config.OPENIM_GROUP_BOT_ENABLED,
+      autoReplyPolicy: context.config.OPENIM_GROUP_AUTO_REPLY_POLICY,
+      groupAllowlistConfigured: groupAllowlist.length > 0,
+      groupSenderAllowlistConfigured: groupSenderAllowlist.length > 0,
+      requireBinding: context.config.OPENIM_GROUP_REQUIRE_BINDING
+    },
+    binding: {
+      evaluated: decision.shouldRun,
+      hasGroupBinding: Boolean(event.groupId && bindings.has(event.groupId)),
+      usedDefaultProject: Boolean(binding?.ok && event.groupId && !bindings.has(event.groupId)),
+      ok: binding?.ok ?? false,
+      reason: binding ? binding.ok ? "allowed" : binding.reason : "not_evaluated"
+    },
+    projectPathPolicy: project
+      ? {
+          evaluated: true,
+          ok: project.ok,
+          reason: project.reason,
+          matchedWorkspaceConfigured: Boolean(project.diagnostics.matchedWorkspace),
+          allowlistConfigured: project.diagnostics.allowlist.length > 0
+        }
+      : {
+          evaluated: false,
+          ok: false,
+          reason: binding ? binding.ok ? "not_evaluated" : binding.reason : "not_evaluated",
+          matchedWorkspaceConfigured: false,
+          allowlistConfigured: parseProjectPathAllowlist(context.config.CODEX_WORKSPACE_ALLOWLIST, context.config.CODEX_DEFAULT_PROJECT_PATH).length > 0
+        }
+  };
 }
 
 function openImCallbackOk(data: Record<string, unknown>) {

@@ -168,6 +168,111 @@ describe("status API", () => {
     context.db.close();
   });
 
+  it("previews group policy decisions without creating jobs or semantic events", async () => {
+    const context = createTempContext();
+    context.config.OPENIM_GROUP_BOT_ENABLED = true;
+    context.config.OPENIM_GROUP_ALLOWLIST = "group_1";
+    context.config.OPENIM_GROUP_SENDER_ALLOWLIST = "user_1";
+    context.config.OPENIM_GROUP_REQUIRE_BINDING = true;
+    context.config.OPENIM_GROUP_PROJECT_BINDINGS = "group_1=/workspace/demo;group_2=/workspace/other";
+    context.config.OPENIM_GROUP_AUTO_REPLY_POLICY = "mention_or_reply";
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const allowed = await app.inject({
+      method: "POST",
+      url: "/api/group-policy/preview",
+      payload: {
+        sendID: "user_1",
+        groupID: "group_1",
+        serverMsgID: "group_server_1",
+        clientMsgID: "group_client_1",
+        contentType: 101,
+        content: JSON.stringify({ content: "@codex_bot please inspect this" })
+      }
+    });
+
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json()).toMatchObject({
+      wouldCreateJob: true,
+      reason: "would_create_job",
+      decision: { shouldRun: true },
+      event: {
+        openimConversationId: "group:group_1",
+        groupId: "group_1",
+        senderUserId: "user_1",
+        contentType: 101,
+        metadata: {}
+      },
+      binding: {
+        evaluated: true,
+        hasGroupBinding: true,
+        usedDefaultProject: false,
+        ok: true,
+        reason: "allowed"
+      },
+      projectPathPolicy: {
+        evaluated: true,
+        ok: true,
+        reason: "allowed",
+        matchedWorkspaceConfigured: true,
+        allowlistConfigured: true
+      }
+    });
+    expect(JSON.stringify(allowed.json())).not.toContain("/workspace/demo");
+    expect(context.semanticEvents.listByConversationId("group:group_1")).toHaveLength(0);
+    expect(context.jobs.listRecentByConversationId("group:group_1")).toHaveLength(0);
+
+    const deniedSender = await app.inject({
+      method: "POST",
+      url: "/api/group-policy/preview",
+      payload: {
+        sendID: "user_2",
+        groupID: "group_1",
+        contentType: 101,
+        content: JSON.stringify({ content: "@codex_bot please inspect this" })
+      }
+    });
+
+    expect(deniedSender.statusCode).toBe(200);
+    expect(deniedSender.json()).toMatchObject({
+      wouldCreateJob: false,
+      reason: "group_sender_not_allowed",
+      decision: { shouldRun: false, reason: "group_sender_not_allowed" },
+      binding: { evaluated: false, hasGroupBinding: true, ok: false, reason: "not_evaluated" }
+    });
+
+    context.config.OPENIM_GROUP_SENDER_ALLOWLIST = "";
+    context.config.OPENIM_GROUP_PROJECT_BINDINGS = "group_1=/workspace/not-allowed";
+    const deniedProject = await app.inject({
+      method: "POST",
+      url: "/api/group-policy/preview",
+      payload: {
+        payload: {
+          sendID: "user_1",
+          groupID: "group_1",
+          contentType: 101,
+          content: JSON.stringify({ content: "@codex_bot please inspect this" })
+        }
+      }
+    });
+
+    expect(deniedProject.statusCode).toBe(200);
+    expect(deniedProject.json()).toMatchObject({
+      wouldCreateJob: false,
+      reason: "project_path_not_allowed",
+      decision: { shouldRun: true },
+      projectPathPolicy: {
+        evaluated: true,
+        ok: false,
+        reason: "outside_allowlist"
+      }
+    });
+    expect(JSON.stringify(deniedProject.json())).not.toContain("/workspace/not-allowed");
+
+    await app.close();
+    context.db.close();
+  });
+
   it("returns bindings and detailed binding status for known conversations", async () => {
     const context = createTempContext();
     context.semanticEvents.insert(event);

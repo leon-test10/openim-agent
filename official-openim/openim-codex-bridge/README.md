@@ -254,6 +254,11 @@ This remains a backend policy; no Codex controls are added to OpenIM native sett
 verify the active group policy. The diagnostics include enabled state, allowlists, required binding,
 auto-reply policy, and bound group ids. They intentionally do not return group project paths.
 
+`POST /api/group-policy/preview` previews the same group parser, trigger policy, allowlists,
+binding policy, and project path allowlist for a candidate OpenIM group callback. It is diagnostic
+only: it does not write semantic events, create jobs, call a runtime, or send OpenIM replies. The
+response redacts configured project paths and reports only policy booleans/reasons.
+
 ## Semantic Context Policy
 
 Codex CLI remains the primary runtime context manager. The bridge does not replace Codex resume,
@@ -318,6 +323,10 @@ mentions, quote/replies, both, or neither.
 
 Phase 5F adds read-only group policy diagnostics to bridge metadata without exposing bound
 workspace paths.
+
+Phase 5G adds a read-only group policy preview endpoint for deployment verification. It explains
+whether a candidate group callback would create a runtime job, while preserving the no-side-effect
+boundary used by metadata diagnostics.
 
 ## Session Model
 
