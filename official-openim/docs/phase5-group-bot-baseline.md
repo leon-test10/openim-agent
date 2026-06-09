@@ -265,12 +265,28 @@ Expected:
 
 ## Current Automated Evidence
 
-As of 2026-06-09 after Phase 5G:
+As of 2026-06-09 after Phase 5G and runtime metadata persistence:
 
 - `npm run build`: passed.
-- `npm test`: passed, 88 tests across 17 files.
+- `npm test`: passed, 93 tests across 19 files.
 - Integration coverage includes group mention, disabled policy, allowlists, quote/reply trigger,
   group project binding, group auto-reply policy, metadata diagnostics, and group policy preview.
+
+## Final Backend Audit
+
+Phase 5 backend scope is implemented as a bridge-only change:
+
+- Group bot execution is disabled by default through `OPENIM_GROUP_BOT_ENABLED=false`.
+- Group webhook routes ingest semantic events before runtime job decisions.
+- Group allowlists, sender allowlists, reply/mention policy, and required binding checks are enforced
+  server-side.
+- Group project bindings are resolved through the existing workspace allowlist validation.
+- Group policy diagnostics and preview responses redact bound project paths.
+- Runtime kind now persists on session records and runtime jobs, and OpenIM bot reply metadata uses the
+  active runtime kind.
+- Electron was not changed for Phase 5, and no Electron path calls Codex CLI.
+- OpenIM client `sendMessage` remains outside the bridge changes; bot replies still go through the
+  bridge OpenIM sender.
 
 ## Remaining Operational Evidence
 
