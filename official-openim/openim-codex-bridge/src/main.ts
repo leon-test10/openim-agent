@@ -11,6 +11,8 @@ import { OpenImHistoryRepository } from "./core/openim-history.repository.js";
 import { ConversationEventBus } from "./core/conversation-event-bus.js";
 import { SpawnCodexCliAdapter } from "./adapters/codex/codex-cli.adapter.js";
 import { CodexCliRunner } from "./runtime/codex-cli.runner.js";
+import { OpenAiCompatibleRunner } from "./runtime/openai-compatible.runner.js";
+import type { AgentRunner } from "./runtime/runner.js";
 import { OpenImAuthClient } from "./adapters/openim/openim-auth.client.js";
 import { OpenImMessageSender } from "./adapters/openim/openim-message.sender.js";
 import { createServer } from "./server.js";
@@ -23,6 +25,7 @@ const codexAdapter = new SpawnCodexCliAdapter({
   codexBin: config.CODEX_BIN,
   timeoutMs: config.CODEX_EXEC_TIMEOUT_MS
 });
+const runner = createRunner();
 
 const context = {
   config,
@@ -40,7 +43,7 @@ const context = {
   runtimeProfiles: new RuntimeProfileRepository(db, config.BRIDGE_SECRET_KEY),
   openimHistory: new OpenImHistoryRepository(db),
   conversationEvents: new ConversationEventBus(),
-  runner: new CodexCliRunner(codexAdapter),
+  runner,
   codex: codexAdapter,
   openimSender: new OpenImMessageSender(config, authClient)
 };
@@ -71,3 +74,17 @@ process.on("SIGTERM", () => {
 });
 
 await app.listen({ port: config.PORT, host: "0.0.0.0" });
+
+function createRunner(): AgentRunner {
+  if (config.RUNTIME_DEFAULT_KIND === "openai_compatible") {
+    return new OpenAiCompatibleRunner({
+      baseUrl: config.OPENAI_COMPATIBLE_BASE_URL,
+      apiKey: config.OPENAI_COMPATIBLE_API_KEY,
+      model: config.OPENAI_COMPATIBLE_MODEL,
+      timeoutMs: config.OPENAI_COMPATIBLE_TIMEOUT_MS,
+      temperature: config.OPENAI_COMPATIBLE_TEMPERATURE,
+      maxTokens: config.OPENAI_COMPATIBLE_MAX_TOKENS
+    });
+  }
+  return new CodexCliRunner(codexAdapter);
+}

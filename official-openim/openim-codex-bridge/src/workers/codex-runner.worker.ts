@@ -108,9 +108,9 @@ export class CodexRunnerWorker {
     }
 
     const session = this.context.sessions.ensureRuntimeFields(job.sessionRecordId);
-    if (!session) {
-      this.context.jobs.markFailed(jobId, {
-        errorText: "Codex session record not found",
+      if (!session) {
+        this.context.jobs.markFailed(jobId, {
+        errorText: "Runtime session record not found",
         failureReason: "missing_session"
       });
       const failed = this.context.jobs.getById(jobId);
@@ -320,7 +320,7 @@ export class CodexRunnerWorker {
         });
         const failed = this.context.jobs.getById(jobId);
         if (failed) this.context.conversationEvents?.publishJob("job_failed", failed);
-        await this.reply(event, jobId, session.id, session.codexSessionId, `Codex CLI failed: ${errorText}`).catch(
+        await this.reply(event, jobId, session.id, session.codexSessionId, `Runtime failed: ${errorText}`).catch(
           (replyError: unknown) => {
             this.context.jobs.markFailed(jobId, {
               errorText: `OpenIM failure reply failed after Codex error: ${replyError instanceof Error ? replyError.message : String(replyError)}`,

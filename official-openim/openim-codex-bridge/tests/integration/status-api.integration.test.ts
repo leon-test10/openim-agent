@@ -1253,7 +1253,7 @@ describe("status API", () => {
       failureReason: "timeout",
       errorText: "mock timeout"
     });
-    expect(sentTexts).toContain("Codex CLI failed: mock timeout");
+    expect(sentTexts).toContain("Runtime failed: mock timeout");
 
     const status = await app.inject({
       method: "GET",

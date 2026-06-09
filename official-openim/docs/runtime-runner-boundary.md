@@ -21,7 +21,8 @@ export interface AgentRunner {
 }
 ```
 
-The only production runner in Phase 4B is `CodexCliRunner`, which wraps the existing `CodexCliAdapter`.
+Phase 4B introduced `CodexCliRunner`, which wraps the existing `CodexCliAdapter`. Phase 4D adds
+`OpenAiCompatibleRunner` for OpenAI-compatible `/v1/chat/completions` endpoints.
 
 ## Codex CLI Mapping
 
@@ -68,12 +69,13 @@ The compatibility view maps current Codex-backed fields into runtime names:
 
 The database keeps `codex_session_records` as the source table and adds compatibility columns for later migration: `runtime_kind`, `external_session_id`, `runtime_home_dir`, and `runtime_config_json`.
 
-## Future Runtime Implementations
+## Runtime Implementations
 
-Future runners should implement `AgentRunner` without modifying OpenIM webhook ingestion, job repositories, or OpenIM reply writing:
+Runtime runners should implement `AgentRunner` without modifying OpenIM webhook ingestion, job repositories, or OpenIM reply writing:
 
+- `codex_cli`: call Codex CLI through `SpawnCodexCliAdapter`, maintain external session id.
 - `openai_compatible`: call `/v1/chat/completions`, return final assistant text, no external session in v1.
-- `openhands`: submit a task to OpenHands REST/API layer and map its events to `runtime_events`.
-- `template`: deterministic test/runtime stub for diagnostics.
+- Future `openhands`: submit a task to OpenHands REST/API layer and map its events to `runtime_events`.
+- Future `template`: deterministic test/runtime stub for diagnostics.
 
 New runtime session tables and Electron Runtime UI migration belong to later phases.

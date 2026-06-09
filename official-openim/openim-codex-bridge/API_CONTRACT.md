@@ -16,7 +16,7 @@ Returns bridge name, version, `apiVersion`, capabilities, `runtimePolicy`, and
 
 Capabilities include Phase 4 `semanticContext` when the bridge supports semantic event import,
 context preview, and manual summary endpoints. Phase 4C also exposes `runtimeApi` and
-`codexLegacyApi`.
+`codexLegacyApi`. Phase 4D exposes `openaiCompatibleRuntime`.
 
 ## Conversations
 
@@ -36,7 +36,7 @@ Returns UI state for one OpenIM conversation:
 
 Runtime-named equivalent for new clients. Returns:
 
-- `runtimeKind`, currently `codex_cli`
+- `runtimeKind`, currently `codex_cli` or `openai_compatible`
 - `activeSession` as `RuntimeSessionView`
 - `activeJob`, `latestJob`, and `recentJobs` as runtime job views
 - `queuedJobCount`
@@ -112,8 +112,8 @@ Lists session records.
 
 Lists session records as runtime views. Runtime view field mapping:
 
-- `runtimeKind`: currently `codex_cli`
-- `externalSessionId`: legacy `codexSessionId`
+- `runtimeKind`: `codex_cli` by default, `openai_compatible` when configured
+- `externalSessionId`: legacy `codexSessionId` for `codex_cli`; `null` for `openai_compatible` v1
 - `projectPath`: legacy `codexProjectPath`
 - `runtimeHomeDir`: legacy `codexHomeDir`
 - `legacyCodex`: original Codex-specific fields retained for migration/debugging
@@ -219,6 +219,25 @@ returned only when backend policy allows dev/admin visibility.
 `GET /api/runtime/profiles?includeDeleted=false`
 
 Read-only runtime-named profile alias. Mutations stay on `/api/runtime-profiles` in Phase 4C.
+
+## OpenAI-Compatible Runtime
+
+Set `RUNTIME_DEFAULT_KIND=openai_compatible` to route bridge jobs to an OpenAI-compatible
+`/v1/chat/completions` endpoint instead of Codex CLI.
+
+Environment:
+
+```env
+OPENAI_COMPATIBLE_BASE_URL=http://127.0.0.1:8000/v1
+OPENAI_COMPATIBLE_API_KEY=dummy
+OPENAI_COMPATIBLE_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct
+OPENAI_COMPATIBLE_TIMEOUT_MS=120000
+OPENAI_COMPATIBLE_TEMPERATURE=0.2
+OPENAI_COMPATIBLE_MAX_TOKENS=2048
+```
+
+The first implementation is stateless: `externalSessionId`, `runtimeHomeDir`, and Codex resume
+fields are not used by this runner.
 
 `POST /api/runtime-profiles`
 

@@ -12,6 +12,7 @@ import { CodexCliRunner } from "./runtime/codex-cli.runner.js";
 import { CodexRunnerWorker } from "./workers/codex-runner.worker.js";
 import { deriveConversationState, toRuntimeJobView } from "./core/conversation-status.js";
 import { toRuntimeJobApiView, toRuntimeSessionView } from "./core/runtime-api-view.js";
+import type { RuntimeKind } from "./runtime/runner.js";
 import type { RuntimeProfileInput } from "./core/runtime-profile.js";
 import { ConversationEventBus, type ConversationStreamEvent } from "./core/conversation-event-bus.js";
 import { SemanticEventIngestService } from "./core/semantic-event-ingest.service.js";
@@ -43,7 +44,7 @@ const BRIDGE_META = {
     runtimeProfiles: true,
     runtimeApi: true,
     codexLegacyApi: true,
-    openaiCompatibleRuntime: false,
+    openaiCompatibleRuntime: true,
     openHandsRuntime: false,
     conversationEvents: true,
     sessionResumeDiagnostics: true,
@@ -358,7 +359,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     if (!job) {
       return reply.notFound("runtime job not found");
     }
-    return toRuntimeJobApiView(toRuntimeJobView(job));
+    return toRuntimeJobApiView(toRuntimeJobView(job), activeRuntimeKind(context));
   });
 
   app.get("/api/jobs/:jobId/events", async (request, reply) => {
@@ -386,7 +387,7 @@ export async function createServer(context: AppContext, logger: Logger) {
       Number.isFinite(after) && after > 0
         ? context.runtimeEvents.listByJobIdAfter(jobId, after)
         : context.runtimeEvents.listByJobId(jobId);
-    return { jobId, runtimeKind: "codex_cli", events };
+    return { jobId, runtimeKind: activeRuntimeKind(context), events };
   });
 
   app.get("/api/jobs/:jobId/events/stream", async (request, reply) => {
@@ -454,12 +455,12 @@ export async function createServer(context: AppContext, logger: Logger) {
         lastSequence = event.sequence;
         reply.raw.write(`id: ${event.sequence}\n`);
         reply.raw.write("event: runtime_event\n");
-        reply.raw.write(`data: ${JSON.stringify({ runtimeKind: "codex_cli", ...event })}\n\n`);
+        reply.raw.write(`data: ${JSON.stringify({ runtimeKind: activeRuntimeKind(context), ...event })}\n\n`);
       }
       const latestJob = context.jobs.getById(jobId);
       if (latestJob && !["queued", "running", "cancelling"].includes(latestJob.status)) {
         reply.raw.write("event: done\n");
-        reply.raw.write(`data: ${JSON.stringify({ jobId, runtimeKind: "codex_cli", status: latestJob.status })}\n\n`);
+        reply.raw.write(`data: ${JSON.stringify({ jobId, runtimeKind: activeRuntimeKind(context), status: latestJob.status })}\n\n`);
         clearInterval(timer);
         reply.raw.end();
       }
@@ -515,7 +516,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     if (!job) {
       return reply.notFound("runtime job not found");
     }
-    return toRuntimeJobApiView(toRuntimeJobView(job));
+    return toRuntimeJobApiView(toRuntimeJobView(job), activeRuntimeKind(context));
   });
 
   app.post("/api/jobs/:jobId/retry", async (request, reply) => {
@@ -547,17 +548,17 @@ export async function createServer(context: AppContext, logger: Logger) {
     }
     if (source.status === "queued" || source.status === "running" || source.status === "cancelling") {
       return bridgeApiError(reply, 409, "job_active", "Only failed, cancelled, or completed jobs can be retried.", {
-        sourceJob: toRuntimeJobApiView(toRuntimeJobView(source))
+        sourceJob: toRuntimeJobApiView(toRuntimeJobView(source), activeRuntimeKind(context))
       });
     }
 
     const retry = worker.retryJob(jobId);
     if (!retry) {
       return bridgeApiError(reply, 409, "retry_unavailable", "Retry requires an active session and the original semantic event.", {
-        sourceJob: toRuntimeJobApiView(toRuntimeJobView(source))
+        sourceJob: toRuntimeJobApiView(toRuntimeJobView(source), activeRuntimeKind(context))
       });
     }
-    return reply.code(201).send(toRuntimeJobApiView(toRuntimeJobView(retry)));
+    return reply.code(201).send(toRuntimeJobApiView(toRuntimeJobView(retry), activeRuntimeKind(context)));
   });
 
   app.get("/api/bindings", async () => {
@@ -698,12 +699,12 @@ export async function createServer(context: AppContext, logger: Logger) {
 
     return {
       openimConversationId: conversationId,
-      runtimeKind: "codex_cli",
+      runtimeKind: activeRuntimeKind(context),
       state: deriveConversationState({ activeSession, activeJob, latestJob }),
-      activeSession: toRuntimeSessionView(activeSession),
-      activeJob: toRuntimeJobApiView(toRuntimeJobView(activeJob)),
-      latestJob: toRuntimeJobApiView(toRuntimeJobView(latestJob)),
-      recentJobs: recentJobs.map((job) => toRuntimeJobApiView(toRuntimeJobView(job))),
+      activeSession: toRuntimeSessionView(activeSession, activeRuntimeKind(context)),
+      activeJob: toRuntimeJobApiView(toRuntimeJobView(activeJob), activeRuntimeKind(context)),
+      latestJob: toRuntimeJobApiView(toRuntimeJobView(latestJob), activeRuntimeKind(context)),
+      recentJobs: recentJobs.map((job) => toRuntimeJobApiView(toRuntimeJobView(job), activeRuntimeKind(context))),
       queuedJobCount: context.jobs.countQueuedByConversationId(conversationId),
       pendingHistoryImport: context.openimHistory.getPendingByConversationId(conversationId)
     };
@@ -728,11 +729,11 @@ export async function createServer(context: AppContext, logger: Logger) {
     const query = request.query as { includeArchived?: string; includeDeleted?: string };
     return {
       conversationId,
-      runtimeKind: "codex_cli",
+      runtimeKind: activeRuntimeKind(context),
       sessions: context.sessions.listByConversationId(conversationId, {
         includeArchived: parseBooleanQuery(query.includeArchived, true),
         includeDeleted: parseBooleanQuery(query.includeDeleted)
-      }).map(toRuntimeSessionView)
+      }).map((session) => toRuntimeSessionView(session, activeRuntimeKind(context)))
     };
   });
 
@@ -926,7 +927,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     const activated = context.sessions.activateSession(conversationId, session.id);
     conversationEvents.publishSessionChanged(conversationId, activated, "manual_new_runtime_session");
     conversationEvents.publishBindingChanged(conversationId, { activeSession: activated, reason: "manual_new_runtime_session" });
-    return reply.code(201).send(toRuntimeSessionView(activated));
+    return reply.code(201).send(toRuntimeSessionView(activated, activeRuntimeKind(context)));
   });
 
   app.post("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/activate", async (request, reply) => {
@@ -965,7 +966,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     const activeJob = context.jobs.getActiveByConversationId(conversationId);
     if (activeJob) {
       return bridgeApiError(reply, 409, "active_job_exists", "Cannot activate a session while a runtime job is queued, running, or cancelling.", {
-        activeJob: toRuntimeJobApiView(toRuntimeJobView(activeJob))
+        activeJob: toRuntimeJobApiView(toRuntimeJobView(activeJob), activeRuntimeKind(context))
       });
     }
     const session = context.sessions.getById(sessionRecordId);
@@ -974,13 +975,13 @@ export async function createServer(context: AppContext, logger: Logger) {
     }
     if (session.status === "archived") {
       return bridgeApiError(reply, 409, "session_archived", "Archived sessions cannot be activated.", {
-        session: toRuntimeSessionView(session)
+        session: toRuntimeSessionView(session, activeRuntimeKind(context))
       });
     }
     const activated = context.sessions.activateSession(conversationId, sessionRecordId);
     conversationEvents.publishSessionChanged(conversationId, activated, "manual_runtime_activate");
     conversationEvents.publishBindingChanged(conversationId, { activeSession: activated, reason: "manual_runtime_activate" });
-    return toRuntimeSessionView(activated);
+    return toRuntimeSessionView(activated, activeRuntimeKind(context));
   });
 
   app.patch("/api/conversations/:conversationId/codex-sessions/:sessionRecordId", async (request, reply) => {
@@ -1020,7 +1021,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     }
     const updated = context.sessions.updateDisplayName(sessionRecordId, displayName);
     conversationEvents.publishSessionChanged(conversationId, updated, "manual_runtime_rename");
-    return toRuntimeSessionView(updated);
+    return toRuntimeSessionView(updated, activeRuntimeKind(context));
   });
 
   app.post("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/archive", async (request, reply) => {
@@ -1053,7 +1054,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     const activeJob = context.jobs.getActiveByConversationId(conversationId);
     if (activeJob) {
       return bridgeApiError(reply, 409, "active_job_exists", "Cannot archive a session while a runtime job is queued, running, or cancelling.", {
-        activeJob: toRuntimeJobApiView(toRuntimeJobView(activeJob))
+        activeJob: toRuntimeJobApiView(toRuntimeJobView(activeJob), activeRuntimeKind(context))
       });
     }
     const archived = context.sessions.archiveSession(conversationId, sessionRecordId);
@@ -1062,7 +1063,7 @@ export async function createServer(context: AppContext, logger: Logger) {
     }
     conversationEvents.publishSessionChanged(conversationId, archived, "manual_runtime_archive");
     conversationEvents.publishBindingChanged(conversationId, { session: archived, reason: "manual_runtime_archive" });
-    return toRuntimeSessionView(archived);
+    return toRuntimeSessionView(archived, activeRuntimeKind(context));
   });
 
   app.post("/api/conversations/:conversationId/codex-sessions/:sessionRecordId/restore", async (request, reply) => {
@@ -1135,6 +1136,10 @@ function runtimeProfilePolicyForRequest(context: AppContext, headers: HeaderBag)
     adminTokenConfigured: Boolean(context.config.CODEX_RUNTIME_ADMIN_TOKEN),
     isAdmin: isAdminRequest(context, headers)
   });
+}
+
+function activeRuntimeKind(context: AppContext): RuntimeKind {
+  return context.runner?.kind ?? context.config.RUNTIME_DEFAULT_KIND;
 }
 
 function isAdminRequest(context: AppContext, headers: HeaderBag): boolean {

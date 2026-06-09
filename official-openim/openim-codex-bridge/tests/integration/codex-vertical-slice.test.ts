@@ -16,6 +16,7 @@ import { ConversationEventBus } from "../../src/core/conversation-event-bus.js";
 import { createServer } from "../../src/server.js";
 import type { AppContext } from "../../src/app-context.js";
 import type { AgentRunner, RuntimeRunHandle } from "../../src/runtime/runner.js";
+import { OpenAiCompatibleRunner } from "../../src/runtime/openai-compatible.runner.js";
 
 const tempDirs: string[] = [];
 
@@ -36,6 +37,7 @@ function createTempContext(runner: AgentRunner, sentTexts: string[]): AppContext
     OPENIM_ADMIN_SECRET: "openIM123",
     OPENIM_ADMIN_TOKEN: "",
     OPENIM_BOT_USER_ID: "codex_bot",
+    RUNTIME_DEFAULT_KIND: runner.kind,
     CODEX_BIN: "codex",
     CODEX_DEFAULT_PROJECT_PATH: "/workspace/demo",
     CODEX_DEFAULT_MODEL: "",
@@ -47,6 +49,12 @@ function createTempContext(runner: AgentRunner, sentTexts: string[]): AppContext
     CODEX_SANDBOX_MODE: "",
     CODEX_WORKSPACE_ALLOWLIST: "/workspace/demo",
     CODEX_RUNTIME_ADMIN_TOKEN: "",
+    OPENAI_COMPATIBLE_BASE_URL: "http://127.0.0.1:8000/v1",
+    OPENAI_COMPATIBLE_API_KEY: "dummy",
+    OPENAI_COMPATIBLE_MODEL: "test-model",
+    OPENAI_COMPATIBLE_TIMEOUT_MS: 120000,
+    OPENAI_COMPATIBLE_TEMPERATURE: 0.2,
+    OPENAI_COMPATIBLE_MAX_TOKENS: 2048,
     CONTEXT_RECENT_EVENT_LIMIT: 30,
     CONTEXT_AUTO_SUMMARY_ENABLED: false,
     CONTEXT_SUMMARY_EVENT_THRESHOLD: 120,
@@ -129,6 +137,67 @@ describe("Codex vertical slice through AgentRunner", () => {
     });
     expect(context.runtimeEvents.listByJobId(jobId).map((event) => event.eventType)).toContain("agent_message");
     expect(sentTexts).toEqual(["SMOKE_ACK"]);
+
+    await app.close();
+    context.db.close();
+  });
+
+  it("can run the OpenAI-compatible runner without a Codex external session", async () => {
+    const sentTexts: string[] = [];
+    const fetchCalls: RequestInit[] = [];
+    const runner = new OpenAiCompatibleRunner({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      apiKey: "dummy",
+      model: "test-model",
+      timeoutMs: 120000,
+      temperature: 0.2,
+      maxTokens: 256,
+      fetchImpl: async (_url, init) => {
+        fetchCalls.push(init);
+        return new Response(JSON.stringify({ choices: [{ message: { content: "OPENAI_COMPATIBLE_ACK" } }] }), {
+          status: 200
+        });
+      }
+    });
+    const context = createTempContext(runner, sentTexts);
+    const app = await createServer(context, pino({ level: "silent" }));
+
+    const webhook = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-single-msg",
+      payload: {
+        sendID: "bridge_user_1",
+        recvID: "codex_bot",
+        conversationID: "single:codex_bot:bridge_user_1",
+        contentType: 101,
+        content: JSON.stringify({ content: "please reply OPENAI_COMPATIBLE_ACK" })
+      }
+    });
+
+    expect(webhook.statusCode).toBe(200);
+    const jobId = webhook.json().data.jobId as string;
+    await waitFor(() => context.jobs.getById(jobId)?.status === "succeeded");
+
+    expect(fetchCalls).toHaveLength(1);
+    expect(context.jobs.getById(jobId)).toMatchObject({
+      status: "succeeded",
+      outputText: "OPENAI_COMPATIBLE_ACK",
+      codexSessionIdAfter: null
+    });
+    expect(context.runtimeEvents.listByJobId(jobId).map((event) => event.eventType)).toContain(
+      "openai_compatible.response_completed"
+    );
+    expect(sentTexts).toEqual(["OPENAI_COMPATIBLE_ACK"]);
+
+    const runtimeStatus = await app.inject({
+      method: "GET",
+      url: "/api/conversations/single%3Acodex_bot%3Abridge_user_1/runtime-status"
+    });
+    expect(runtimeStatus.json()).toMatchObject({
+      runtimeKind: "openai_compatible",
+      activeSession: { externalSessionId: null },
+      latestJob: { externalSessionIdAfter: null }
+    });
 
     await app.close();
     context.db.close();

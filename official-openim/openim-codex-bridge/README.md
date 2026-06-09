@@ -123,6 +123,8 @@ OPENIM_ADMIN_SECRET=
 OPENIM_ADMIN_TOKEN=
 OPENIM_BOT_USER_ID=codex_bot
 
+RUNTIME_DEFAULT_KIND=codex_cli
+
 CODEX_BIN=codex
 CODEX_DEFAULT_PROJECT_PATH=/workspace/openim-demo
 CODEX_DEFAULT_MODEL=
@@ -134,6 +136,14 @@ CODEX_BASE_HOME=
 CODEX_SANDBOX_MODE=
 CODEX_WORKSPACE_ALLOWLIST=/workspace/openim-demo
 CODEX_RUNTIME_ADMIN_TOKEN=
+
+OPENAI_COMPATIBLE_BASE_URL=http://127.0.0.1:8000/v1
+OPENAI_COMPATIBLE_API_KEY=dummy
+OPENAI_COMPATIBLE_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct
+OPENAI_COMPATIBLE_TIMEOUT_MS=120000
+OPENAI_COMPATIBLE_TEMPERATURE=0.2
+OPENAI_COMPATIBLE_MAX_TOKENS=2048
+
 CONTEXT_RECENT_EVENT_LIMIT=30
 CONTEXT_AUTO_SUMMARY_ENABLED=false
 CONTEXT_SUMMARY_EVENT_THRESHOLD=120
@@ -201,7 +211,7 @@ Semantic events track delivery metadata (`deliveredJobId`, `deliveredSessionReco
 redelivered on every normal resume. Manual summaries are deterministic bridge diagnostics and
 supplements; they are not a replacement for Codex CLI's own compaction.
 
-## Phase 4A/4B Status
+## Phase 4A/4B/4C/4D Status
 
 Phase 4A keeps Codex CLI as the first supported runtime and validates the existing vertical path:
 OpenIM webhook ingestion, semantic event persistence, runtime job queueing, Codex execution,
@@ -214,8 +224,13 @@ runtime execution is delegated through `AgentRunner`. The production implementat
 `CodexCliRunner`, which wraps the existing `SpawnCodexCliAdapter`. Boundary details are tracked in
 `../docs/runtime-runner-boundary.md`.
 
-Later runtime API naming, OpenAI-compatible runtimes, OpenHands, and Electron Runtime UI migration
-remain out of scope for Phase 4A/4B.
+Phase 4C adds runtime-named API aliases while keeping legacy Codex APIs stable.
+
+Phase 4D adds an `openai_compatible` runtime runner for vLLM, Ollama OpenAI-compatible endpoints,
+LM Studio, DeepSeek/OpenAI-compatible APIs, and other `/v1/chat/completions` providers. The default
+remains `codex_cli`; set `RUNTIME_DEFAULT_KIND=openai_compatible` to route bridge jobs through the
+OpenAI-compatible runner. This runner is stateless in its first version, so it returns
+`externalSessionId: null`.
 
 ## Session Model
 

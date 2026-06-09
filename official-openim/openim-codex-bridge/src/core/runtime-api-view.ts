@@ -49,7 +49,10 @@ export interface RuntimeConversationStatusView {
   pendingHistoryImport?: unknown;
 }
 
-export function toRuntimeSessionView(session: CodexSessionRecord | null): RuntimeSessionView | null {
+export function toRuntimeSessionView(
+  session: CodexSessionRecord | null,
+  runtimeKind: RuntimeKind = "codex_cli"
+): RuntimeSessionView | null {
   if (!session) {
     return null;
   }
@@ -57,10 +60,10 @@ export function toRuntimeSessionView(session: CodexSessionRecord | null): Runtim
     id: session.id,
     openimConversationId: session.openimConversationId,
     openimDisplayUserId: session.openimDisplayUserId,
-    runtimeKind: "codex_cli",
-    externalSessionId: session.codexSessionId,
+    runtimeKind,
+    externalSessionId: runtimeKind === "codex_cli" ? session.codexSessionId : null,
     projectPath: session.codexProjectPath,
-    runtimeHomeDir: session.codexHomeDir,
+    runtimeHomeDir: runtimeKind === "codex_cli" ? session.codexHomeDir : null,
     displayName: session.displayName,
     lastSummary: session.lastSummary,
     isActive: session.isActive,
@@ -78,15 +81,18 @@ export function toRuntimeSessionView(session: CodexSessionRecord | null): Runtim
   };
 }
 
-export function toRuntimeJobApiView(job: RuntimeJobView | null): RuntimeJobApiView | null {
+export function toRuntimeJobApiView(
+  job: RuntimeJobView | null,
+  runtimeKind: RuntimeKind = "codex_cli"
+): RuntimeJobApiView | null {
   if (!job) {
     return null;
   }
   return {
     ...job,
-    runtimeKind: "codex_cli",
-    externalSessionIdBefore: job.codexSessionIdBefore,
-    externalSessionIdAfter: job.codexSessionIdAfter,
+    runtimeKind,
+    externalSessionIdBefore: runtimeKind === "codex_cli" ? job.codexSessionIdBefore : null,
+    externalSessionIdAfter: runtimeKind === "codex_cli" ? job.codexSessionIdAfter : null,
     legacyCodex: {
       codexSessionIdBefore: job.codexSessionIdBefore,
       codexSessionIdAfter: job.codexSessionIdAfter
