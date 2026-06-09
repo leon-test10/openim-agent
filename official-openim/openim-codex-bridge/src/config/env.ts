@@ -9,6 +9,8 @@ const EnvSchema = z.object({
   OPENIM_ADMIN_TOKEN: z.string().optional().default(""),
   OPENIM_BOT_USER_ID: z.string().default("codex_bot"),
   OPENIM_GROUP_BOT_ENABLED: z.coerce.boolean().default(false),
+  OPENIM_GROUP_ALLOWLIST: z.string().optional().default(""),
+  OPENIM_GROUP_SENDER_ALLOWLIST: z.string().optional().default(""),
   RUNTIME_DEFAULT_KIND: z.enum(["codex_cli", "openai_compatible", "openhands"]).default("codex_cli"),
   CODEX_BIN: z.string().default("codex"),
   CODEX_DEFAULT_PROJECT_PATH: z.string().default("/workspace/openim-demo"),

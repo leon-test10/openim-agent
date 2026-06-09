@@ -291,7 +291,9 @@ export async function createServer(context: AppContext, logger: Logger) {
 
     const decision = shouldCreateRuntimeJob(event, {
       botUserId: context.config.OPENIM_BOT_USER_ID,
-      groupBotEnabled: context.config.OPENIM_GROUP_BOT_ENABLED
+      groupBotEnabled: context.config.OPENIM_GROUP_BOT_ENABLED,
+      groupAllowlist: parseConfigList(context.config.OPENIM_GROUP_ALLOWLIST),
+      groupSenderAllowlist: parseConfigList(context.config.OPENIM_GROUP_SENDER_ALLOWLIST)
     });
     if (!decision.shouldRun) {
       return openImCallbackOk({ ignored: true, reason: decision.reason });
@@ -1524,4 +1526,11 @@ function normalizeOpenImConversationId(conversationId: string, botUserId: string
 
 function isGroupCallbackCommand(command: string | undefined): boolean {
   return command?.toLowerCase().includes("group") ?? false;
+}
+
+function parseConfigList(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(/[;,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }

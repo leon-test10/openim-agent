@@ -7,6 +7,8 @@ export type AgentDecisionReason =
   | "unsupported_content_type"
   | "empty_text"
   | "group_bot_disabled"
+  | "group_not_allowed"
+  | "group_sender_not_allowed"
   | "group_message_not_addressed_to_bot";
 
 export type AgentDecision =
@@ -16,6 +18,8 @@ export type AgentDecision =
 export interface AgentDecisionConfig {
   botUserId: string;
   groupBotEnabled?: boolean;
+  groupAllowlist?: readonly string[];
+  groupSenderAllowlist?: readonly string[];
 }
 
 export function shouldCreateRuntimeJob(
@@ -52,6 +56,14 @@ export function shouldCreateRuntimeJob(
 function shouldCreateGroupRuntimeJob(event: SemanticEvent, config: AgentDecisionConfig): AgentDecision {
   if (!config.groupBotEnabled) {
     return { shouldRun: false, reason: "group_bot_disabled" };
+  }
+
+  if (!isAllowed(event.groupId, config.groupAllowlist)) {
+    return { shouldRun: false, reason: "group_not_allowed" };
+  }
+
+  if (!isAllowed(event.senderUserId, config.groupSenderAllowlist)) {
+    return { shouldRun: false, reason: "group_sender_not_allowed" };
   }
 
   if (event.senderUserId === config.botUserId) {
@@ -93,5 +105,12 @@ function isGeneratedByCodex(ex: unknown): boolean {
 
 function isAddressedToBot(text: string, botUserId: string): boolean {
   const escaped = botUserId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|\\s)@?${escaped}(\\b|\\s|:|,|，|：)`, "i").test(text);
+  return new RegExp(`(^|\\s)@?${escaped}($|\\s|:|,|，|：)`, "i").test(text);
+}
+
+function isAllowed(value: string | null | undefined, allowlist: readonly string[] | undefined): boolean {
+  if (!allowlist?.length) {
+    return true;
+  }
+  return Boolean(value && allowlist.includes(value));
 }

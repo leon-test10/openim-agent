@@ -91,6 +91,37 @@ describe("shouldCreateRuntimeJob", () => {
     expect(decision).toEqual({ shouldRun: true });
   });
 
+  it("ignores mentioned group text from groups outside the backend allowlist", () => {
+    const decision = shouldCreateRuntimeJob(
+      {
+        ...baseEvent,
+        openimConversationId: "group:group_2",
+        receiverUserId: null,
+        groupId: "group_2",
+        text: "@codex_bot help"
+      },
+      { botUserId: "codex_bot", groupBotEnabled: true, groupAllowlist: ["group_1"] }
+    );
+
+    expect(decision).toEqual({ shouldRun: false, reason: "group_not_allowed" });
+  });
+
+  it("ignores mentioned group text from senders outside the backend allowlist", () => {
+    const decision = shouldCreateRuntimeJob(
+      {
+        ...baseEvent,
+        openimConversationId: "group:group_1",
+        receiverUserId: null,
+        groupId: "group_1",
+        senderUserId: "user_2",
+        text: "@codex_bot help"
+      },
+      { botUserId: "codex_bot", groupBotEnabled: true, groupSenderAllowlist: ["user_1"] }
+    );
+
+    expect(decision).toEqual({ shouldRun: false, reason: "group_sender_not_allowed" });
+  });
+
   it("ignores group text that does not mention the bot", () => {
     const decision = shouldCreateRuntimeJob(
       {

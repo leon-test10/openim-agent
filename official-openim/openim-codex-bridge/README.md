@@ -123,6 +123,8 @@ OPENIM_ADMIN_SECRET=
 OPENIM_ADMIN_TOKEN=
 OPENIM_BOT_USER_ID=codex_bot
 OPENIM_GROUP_BOT_ENABLED=false
+OPENIM_GROUP_ALLOWLIST=
+OPENIM_GROUP_SENDER_ALLOWLIST=
 
 RUNTIME_DEFAULT_KIND=codex_cli
 
@@ -213,8 +215,17 @@ testing. When enabled, Phase 5A still queues a runtime job only for text message
 bot by id, for example `@codex_bot please inspect this`. Non-mentioned group chatter is persisted as
 semantic context but returns `group_message_not_addressed_to_bot` and does not create a job.
 
-This is not full group bot productization: group permissions, group binding policy, quote/reply
-triggering, and auto-reply policy remain later Phase 5 work.
+Phase 5B adds backend allowlist gates:
+
+- `OPENIM_GROUP_ALLOWLIST=group_1;group_2` restricts which groups may trigger runtime jobs.
+- `OPENIM_GROUP_SENDER_ALLOWLIST=user_1;user_2` restricts which group speakers may trigger jobs.
+
+Both allowlists accept comma or semicolon separated ids. Empty allowlists mean "no extra allowlist
+restriction"; `OPENIM_GROUP_BOT_ENABLED` and mention detection still apply. Denied group traffic is
+still ingested as semantic context and returns `group_not_allowed` or `group_sender_not_allowed`.
+
+This is not full group bot productization: group binding policy, quote/reply triggering, and
+auto-reply policy remain later Phase 5 work.
 
 ## Semantic Context Policy
 
@@ -264,6 +275,10 @@ Phase 4E adds an `openhands` runner spike stub and documents the adapter contrac
 Phase 5A adds a disabled-by-default OpenIM group webhook slice. It preserves group semantic events
 and can queue runtime jobs only when `OPENIM_GROUP_BOT_ENABLED=true` and the text message mentions
 `OPENIM_BOT_USER_ID`.
+
+Phase 5B adds backend group permission gates through `OPENIM_GROUP_ALLOWLIST` and
+`OPENIM_GROUP_SENDER_ALLOWLIST`. Denied group messages remain semantic events but do not create
+runtime jobs.
 
 ## Session Model
 

@@ -42,6 +42,16 @@ When group bot execution is enabled, Phase 5A still only creates jobs for text m
 `OPENIM_BOT_USER_ID`, such as `@codex_bot ...`. Non-mentioned group messages return
 `group_message_not_addressed_to_bot`; disabled group traffic returns `group_bot_disabled`.
 
+Phase 5B group permission policy is enforced server-side:
+
+- `OPENIM_GROUP_ALLOWLIST` optionally restricts allowed `groupID` values.
+- `OPENIM_GROUP_SENDER_ALLOWLIST` optionally restricts allowed speaker `sendID` values.
+- Both settings accept comma or semicolon separated ids.
+- Empty allowlists mean no extra allowlist restriction.
+
+Denied group messages are still ingested into `semantic_events`, but do not create jobs. Rejection
+reasons are `group_not_allowed` and `group_sender_not_allowed`.
+
 `POST /webhooks/openim/after-send-group-msg/:command`
 
 Compatibility route for suffixed OpenIM group callback command paths.

@@ -42,6 +42,8 @@ function createTempContext(
     OPENIM_ADMIN_TOKEN: "",
     OPENIM_BOT_USER_ID: "codex_bot",
     OPENIM_GROUP_BOT_ENABLED: false,
+    OPENIM_GROUP_ALLOWLIST: "",
+    OPENIM_GROUP_SENDER_ALLOWLIST: "",
     RUNTIME_DEFAULT_KIND: runner.kind,
     CODEX_BIN: "codex",
     CODEX_DEFAULT_PROJECT_PATH: "/workspace/demo",
@@ -234,7 +236,41 @@ describe("Codex vertical slice through AgentRunner", () => {
     };
     const context = createTempContext(runner, sentTexts, sentMessages);
     context.config.OPENIM_GROUP_BOT_ENABLED = true;
+    context.config.OPENIM_GROUP_ALLOWLIST = "group_1";
+    context.config.OPENIM_GROUP_SENDER_ALLOWLIST = "bridge_user_1";
     const app = await createServer(context, pino({ level: "silent" }));
+
+    const deniedGroup = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-group-msg",
+      payload: {
+        sendID: "bridge_user_1",
+        groupID: "group_2",
+        contentType: 101,
+        content: JSON.stringify({ content: "@codex_bot denied group" })
+      }
+    });
+    expect(deniedGroup.statusCode).toBe(200);
+    expect(deniedGroup.json().data).toMatchObject({
+      ignored: true,
+      reason: "group_not_allowed"
+    });
+
+    const deniedSender = await app.inject({
+      method: "POST",
+      url: "/webhooks/openim/after-send-group-msg",
+      payload: {
+        sendID: "other_user",
+        groupID: "group_1",
+        contentType: 101,
+        content: JSON.stringify({ content: "@codex_bot denied sender" })
+      }
+    });
+    expect(deniedSender.statusCode).toBe(200);
+    expect(deniedSender.json().data).toMatchObject({
+      ignored: true,
+      reason: "group_sender_not_allowed"
+    });
 
     const ignored = await app.inject({
       method: "POST",

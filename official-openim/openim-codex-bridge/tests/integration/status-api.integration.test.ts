@@ -39,6 +39,8 @@ function createTempContext(overrides: Partial<Pick<AppContext, "codex" | "openim
     OPENIM_ADMIN_TOKEN: "",
     OPENIM_BOT_USER_ID: "codex_bot",
     OPENIM_GROUP_BOT_ENABLED: false,
+    OPENIM_GROUP_ALLOWLIST: "",
+    OPENIM_GROUP_SENDER_ALLOWLIST: "",
     RUNTIME_DEFAULT_KIND: "codex_cli" as const,
     CODEX_BIN: "codex",
     CODEX_DEFAULT_PROJECT_PATH: "/workspace/demo",
